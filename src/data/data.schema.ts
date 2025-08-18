@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Document } from 'mongoose';
+import { Collection, Document } from 'mongoose';
 
 export type IoTDataDocument = IoTData & Document;
 

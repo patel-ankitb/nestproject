@@ -8,7 +8,6 @@ import { MongooseService } from './mongoose.service';
     ConfigModule.forRoot({ isGlobal: true }),
     MongooseModule.forRootAsync({
       useClass: MongooseService,
-      inject: [MongooseService],
     }),
   ],
   providers: [MongooseService],
