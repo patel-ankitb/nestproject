@@ -2,34 +2,49 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ExpressAdapter } from '@nestjs/platform-express';
 import express from 'express';
-import { Model } from 'mongoose';
-import { IoTDataDocument, IoTData } from './data/data.schema';
-import { getModelToken } from '@nestjs/mongoose';
+import mongoose from 'mongoose';
 
 async function bootstrap() {
   const expressApp = express();
-
   const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp));
 
-  // Get the native express instance used by Nest
   const server = app.getHttpAdapter().getInstance();
 
-  // Attach routes BEFORE init
-  server.get('/alldata', async (_req, res) => {
+  // ✅ Get all documents from any collection
+  server.get('/data/:collection', async (req, res) => {
     try {
-      const iotDataModel: Model<IoTDataDocument> = app.get(getModelToken(IoTData.name));
-      const data = await iotDataModel.find().limit(100).exec();
+      const { collection } = req.params;
+
+      if (!mongoose.connection.db) {
+        return res.status(500).json({ error: 'Database not connected' });
+      }
+
+      const data = await mongoose.connection.db
+        .collection(collection) // dynamic collection
+        .find({})
+        .limit(100)
+        .toArray();
+
       res.json(data);
     } catch (err) {
       res.status(500).json({ error: 'Failed to fetch data', details: err.message });
     }
   });
 
-  server.get('/alldata1/:id', async (req, res) => {
+  // ✅ Get one document by ID from any collection
+  server.get('/data/:collection/:id', async (req, res) => {
     try {
-      const iotDataModel: Model<IoTDataDocument> = app.get(getModelToken(IoTData.name));
-      const { id } = req.params;
-      const data = await iotDataModel.findById(id).exec();
+      const { collection, id } = req.params;
+
+      if (!mongoose.connection.db) {
+        return res.status(500).json({ error: 'Database not connected' });
+      }
+
+      const { ObjectId } = mongoose.Types;
+      const data = await mongoose.connection.db
+        .collection(collection) // dynamic collection
+        .findOne({ _id: new ObjectId(id) });
+
       if (!data) return res.status(404).json({ error: 'Not found' });
       res.json(data);
     } catch (err) {
@@ -38,7 +53,9 @@ async function bootstrap() {
   });
 
   await app.init();
-  await app.listen(3003);
-  console.log(`🚀 Server running on http://localhost:3003`);
+  const port = process.env.PORT || 3003;
+  await app.listen(port);
+  console.log(`🚀 Server running on http://localhost:${port}`);
 }
+
 bootstrap();
