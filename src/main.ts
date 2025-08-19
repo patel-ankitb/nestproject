@@ -8,19 +8,23 @@ async function bootstrap() {
   const expressApp = express();
   const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp));
 
+  // ✅ Connect to MongoDB first
+  const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/mydb';
+  await mongoose.connect(MONGO_URI);
+  console.log('✅ MongoDB Connected');
+
   const server = app.getHttpAdapter().getInstance();
 
-  // ✅ Get all documents from any collection
+  // ✅ Get all documents
   server.get('/data/:collection', async (req, res) => {
     try {
-      const { collection } = req.params;
-
       if (!mongoose.connection.db) {
         return res.status(500).json({ error: 'Database not connected' });
       }
 
+      const { collection } = req.params;
       const data = await mongoose.connection.db
-        .collection(collection) // dynamic collection
+        .collection(collection)
         .find({})
         .limit(100)
         .toArray();
@@ -31,18 +35,18 @@ async function bootstrap() {
     }
   });
 
-  // ✅ Get one document by ID from any collection
+  // ✅ Get one document by ID
   server.get('/data/:collection/:id', async (req, res) => {
     try {
-      const { collection, id } = req.params;
-
       if (!mongoose.connection.db) {
         return res.status(500).json({ error: 'Database not connected' });
       }
 
+      const { collection, id } = req.params;
       const { ObjectId } = mongoose.Types;
+
       const data = await mongoose.connection.db
-        .collection(collection) // dynamic collection
+        .collection(collection)
         .findOne({ _id: new ObjectId(id) });
 
       if (!data) return res.status(404).json({ error: 'Not found' });
