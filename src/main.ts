@@ -26,7 +26,7 @@ async function bootstrap() {
       const data = await mongoose.connection.db
         .collection(collection)
         .find({})
-        .limit(100)
+        .limit(10)
         .toArray();
 
       res.json(data);
