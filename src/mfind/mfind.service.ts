@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import e from 'express';
 import mongoose from 'mongoose';
 
 @Injectable()
@@ -57,20 +58,16 @@ export class MFindService {
     // ✅ Safe query build
     const mongoQuery: any = {};
 
-    if (query.registrationrto) {
-      if (typeof query.registrationrto === 'object' && query.registrationrto.$regex) {
-        // already in regex format
-        mongoQuery.registrationrto = query.registrationrto;
-      } else {
-        // string → convert into regex, trim and normalize input
-        const normalizedInput = query.registrationrto.trim();
-        mongoQuery.registrationrto = { $regex: normalizedInput, $options: 'i' };
-      }
-    }
-
-    // ✅ Log query for debugging
-    console.log('🔍 Input Query:', JSON.stringify(query, null, 2));
-    console.log('🔍 Mongo Query:', JSON.stringify(mongoQuery, null, 2));
+    // if (query.registrationrto) {
+    //   if (typeof query.registrationrto === 'object' && query.registrationrto.$regex) {
+    //     // already in regex format
+    //     mongoQuery.registrationrto = query.registrationrto;
+    //   } else {
+    //     // string → convert into regex, trim and normalize input
+    //     const normalizedInput = query.registrationrto.trim();
+    //     mongoQuery.registrationrto = { $regex: normalizedInput, $options: 'i' };
+    //   }
+    // }
 
     // ✅ Pipeline
     const pipeline: any[] = [{ $match: mongoQuery }];
@@ -97,6 +94,17 @@ export class MFindService {
 
     pipeline.push({ $skip: Number(skip) });
     pipeline.push({ $limit: Number(limit) });
+    if (companyId) {
+        pipeline.push({ $match: { companyId } });
+    }else{
+        pipeline.push({ $match: { companyId: { $exists: false } } });
+
+    }
+
+    pipeline.push({ $addFields: { tableType: tableType || 'default' } });
+
+
+
 
     console.log('🚀 Final Pipeline:', JSON.stringify(pipeline, null, 2));
 
