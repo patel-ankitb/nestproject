@@ -1,23 +1,25 @@
-import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+// // src/mfind/mfind.token.ts
+// import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
+// import * as jwt from 'jsonwebtoken';
 
-@Injectable()
-export class TokenGuard implements CanActivate {
-  private readonly API_TOKEN = process.env.API_TOKEN || 'mySecretToken123';
+// @Injectable()
+// export class JwtAuthGuard implements CanActivate {
+//   canActivate(context: ExecutionContext): boolean {
+//     const request = context.switchToHttp().getRequest();
+//     const authHeader = request.headers['authorization'];
 
-  canActivate(context: ExecutionContext): boolean {
-    const request = context.switchToHttp().getRequest();
-    const authHeader = request.headers['authorization'];
+//     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+//       throw new UnauthorizedException('Missing or invalid Authorization header');
+//     }
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      throw new UnauthorizedException('Missing or invalid Authorization header');
-    }
+//     const token = authHeader.split(' ')[1].trim();
 
-    const token = authHeader.replace('Bearer ', '').trim();
-
-    if (token !== this.API_TOKEN) {
-      throw new UnauthorizedException('Invalid token');
-    }
-
-    return true;
-  }
-}
+//     try {
+//       const decoded = jwt.verify(token, process.env.JWT_SECRET || 'ankit');
+//       request.user = decoded;
+//       return true;
+//     } catch {
+//       throw new UnauthorizedException('Invalid or expired token');
+//     }
+//   }
+// }

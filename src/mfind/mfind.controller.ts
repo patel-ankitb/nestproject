@@ -1,23 +1,27 @@
-import { Body, Controller, Post } from '@nestjs/common';
+import { Body, Controller, Post, Headers, HttpCode } from '@nestjs/common';
 import { MFindService } from './mfind.service';
 
 @Controller('mfind')
 export class MFindController {
   constructor(private readonly mfindService: MFindService) {}
 
+  // ---------------- LOGIN ----------------
+  @Post('login')
+  async login(@Body() body: any) {
+    // ✅ Pass username & password from body to service
+    return this.mfindService.login(body);
+  }
+
+  // ---------------- REGISTER ----------------
+  @Post('register')
+  async register() {
+    return { message: 'Static user, register disabled' };
+  }
+
+  // ---------------- AGGREGATION ----------------
   @Post()
-  async mfind(@Body() body: any) {
-    try {
-      console.log('📥 Request Body:', JSON.stringify(body, null, 2));
-      const result = await this.mfindService.runAggregation(body);
-      return {
-        success: true,
-        count: result.length,
-        data: result,
-      };
-    } catch (error) {
-      console.error('❌ mFind Error:', error);
-      return { success: false, error: error.message };
-    }
+  @HttpCode(200) // Explicitly set to 200 OK for data retrieval
+  async mfind(@Body() body: any, @Headers() headers: any) {
+    return this.mfindService.runAggregation(body, headers);
   }
 }
