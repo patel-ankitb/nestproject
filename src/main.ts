@@ -11,7 +11,7 @@
     // ✅ Connect to MongoDB first
     const MONGO_URI = process.env.MONGO_URI || 'mongodb://localhost:27017/mydb';
     await mongoose.connect(MONGO_URI);
-    console.log('✅ MongoDB Connected');
+    console.log('✅ MongoDB Connected', MONGO_URI);
 
     const server = app.getHttpAdapter().getInstance();
 

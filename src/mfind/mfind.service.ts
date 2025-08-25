@@ -1,90 +1,96 @@
-import { Injectable, UnauthorizedException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
+import * as fs from 'fs';
 
 @Injectable()
 export class MFindService {
-  private readonly JWT_SECRET = 'myStaticSecretKey'; // 🔑 Secret for JWT
-  private readonly STATIC_USER = {
-    username: 'admin',   // 🔒 Static username
-    password: 'admin1234' // 🔒 Static password
-  };
+  private readonly JWT_SECRET = 'myStaticSecretKey';
+
+  // 🔹 AppName → DB Name mapping
+  private AppDbMap: Record<string, string> = {};
+  
+  constructor() {
+    this.loadAppDbMap();
+  }
+
+  /**
+   * Load appName → dbName mapping from a JSON file (by default 'app-db-map.json')
+   * You can override file path with APP_DB_MAP_FILE env var.
+   * Falls back to built-in default mapping if file not found or invalid.
+   */
+  private loadAppDbMap(): void {
+    const defaultMap: Record<string, string> = {
+      'app6716866755631': 'dataproject',
+      // add more defaults if needed
+    };
+
+    const mapFile = process.env.APP_DB_MAP_FILE || 'app-db-map.json';
+    try {
+      if (fs.existsSync(mapFile)) {
+        const raw = fs.readFileSync(mapFile, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          this.AppDbMap = { ...defaultMap, ...parsed };
+          return;
+        }
+      }
+    } catch (e) {
+      // ignore and fall back to defaults
+    }
+
+    this.AppDbMap = defaultMap;
+  }
+
+  private getDbName(appName: string): string {
+    const dbName = this.AppDbMap[appName];
+    if (!dbName) {
+      throw new BadRequestException(`App config not found for appName: ${appName}`);
+    }
+    return dbName;
+  }
 
   // ---------------- LOGIN ----------------
   async login(body: any) {
     const { username, password } = body;
 
-    // ✅ Validate static username & password
-    if (username !== this.STATIC_USER.username || password !== this.STATIC_USER.password) {
+    if (username !== 'admin' || password !== 'admin1234') {
       throw new UnauthorizedException('Invalid username or password');
     }
 
-    // ✅ Generate JWT
-    const payload = { username };
-    const token = jwt.sign(payload, this.JWT_SECRET, { expiresIn: '1h' });
+    const token = jwt.sign({ username }, this.JWT_SECRET, { expiresIn: '1h' });
     return { access_token: token };
   }
 
   // ---------------- VERIFY TOKEN ----------------
   verifyToken(authHeader: string | undefined) {
-    // Check if Authorization header exists
-    if (!authHeader) {
-      throw new UnauthorizedException('Authorization header is missing');
-    }
+    if (!authHeader) throw new UnauthorizedException('Authorization header is missing');
 
-    // Normalize header to handle case-insensitive keys
     if (!authHeader.toLowerCase().startsWith('bearer ')) {
       throw new UnauthorizedException('Authorization header must start with "Bearer "');
     }
 
-    const token = authHeader.slice(7).trim(); // Remove 'Bearer ' prefix and trim whitespace
-    if (!token) {
-      throw new UnauthorizedException('Token is missing in Authorization header');
-    }
+    const token = authHeader.slice(7).trim();
+    if (!token) throw new UnauthorizedException('Token is missing');
 
     try {
-      const decoded = jwt.verify(token, this.JWT_SECRET);
-      console.log('Decoded token:', decoded); // Add logging for debugging
-      return decoded;
-    } catch (error) {
-      if (error instanceof jwt.TokenExpiredError) {
-        throw new UnauthorizedException('Token has expired');
-      } else if (error instanceof jwt.JsonWebTokenError) {
-        throw new UnauthorizedException('Invalid token: ' + error.message);
-      } else {
-        throw new UnauthorizedException('Token verification failed');
-      }
+      return jwt.verify(token, this.JWT_SECRET);
+    } catch {
+      throw new UnauthorizedException('Invalid or expired token');
     }
   }
 
-  
-    
-  async runAggregation(body: any, headers: any) {
-    // ✅ Check token before running query
-    const authHeader = Object.keys(headers).find(
-      (key) => key.toLowerCase() === 'authorization'
-    );
-    
+  // ---------------- RUN AGGREGATION ----------------
+  async runAggregation(body: any, headers: any, reqUserAuth?: any) {
+    const authHeader = Object.keys(headers).find((k) => k.toLowerCase() === 'authorization');
     const token = authHeader ? headers[authHeader] : undefined;
-    
-    // If no token provided, return error message
-    if (!token || token.trim() === '') {
-      return { 
-        error: true, 
-        message: 'Authorization token is required', 
-        data: [] 
-      };
-    }
-    
-    // Verify token validity
+
+    if (!token) return { error: true, message: 'Authorization token required', data: [] };
+
     try {
-      await this.verifyToken(token);
-    } catch (error) {
-      return { 
-        error: true, 
-        message: 'Invalid or expired authorization token', 
-        data: [] 
-      };
+      this.verifyToken(token);
+    } catch {
+      return { error: true, message: 'Invalid or expired authorization token', data: [] };
     }
 
     const {
@@ -94,7 +100,7 @@ export class MFindService {
       projection = {},
       limit = 10,
       skip = 0,
-      order = 'descending',
+      order = 'ascending',
       sortBy = '_id',
       lookups = [],
       companyId,
@@ -102,120 +108,124 @@ export class MFindService {
     } = body;
 
     if (!appName || !moduleName) {
-      return { 
-        error: true, 
-        message: 'appName and moduleName are required', 
-        data: [] 
-      };
-    }
-
-    // Validate query and projection are objects
-    if (typeof query !== 'object' || query === null) {
-      return { 
-        error: true, 
-        message: 'query must be a valid object', 
-        data: [] 
-      };
-    }
-    if (typeof projection !== 'object' || projection === null) {
-      return { 
-        error: true, 
-        message: 'projection must be a valid object', 
-        data: [] 
-      };
-    }
-    if (!Array.isArray(lookups)) {
-      return { 
-        error: true, 
-        message: 'lookups must be an array', 
-        data: [] 
-      };
+      throw new BadRequestException('appName (DB) and moduleName (Collection) are required');
     }
 
     try {
-      // ✅ Get DB connection
-      const connection = mongoose.connection.useDb(appName);
+      // 🔹 Map appName → dbName
+      const dbName = this.getDbName(appName);
 
-      if (!connection.db) {
-        return { 
-          error: true, 
-          message: 'Database connection is not available', 
-          data: [] 
-        };
-      }
+      // 1️ Connect to DB
+      const connection = mongoose.connection.useDb(dbName);
+      console.log(`Connected to database: ${dbName} (from appName: ${appName})`);
 
-      const collections = await connection.db.listCollections().toArray();
-      const collectionExists = collections.some((col) => col.name === moduleName);
-      if (!collectionExists) {
-        return { 
-          error: true, 
-          message: `Collection ${moduleName} does not exist`, 
-          data: [] 
-        };
+      //  Safe null check
+      const collections = connection?.db
+        ? await connection.db.listCollections().toArray()
+        : [];
+      const collectionExists = collections.some((c) => c.name === moduleName);
+      if (!collectionExists && moduleName.toLowerCase() !== 'modules') {
+        return { error: true, message: `Collection ${moduleName} not found`, data: [] };
       }
 
       const collection = connection.collection(moduleName);
 
-      // ✅ Build aggregation pipeline
-      const pipeline: any[] = [{ $match: query }];
+      // 🔹 Special cases
+      if (
+        ['chat', 'mobileappdesign', 'mobileappdesign1', 'mobileappdesign2', 'mobileappdesign3']
+          .includes(moduleName.toLowerCase())
+      ) {
+        const documents = await collection
+          .find(query, { projection })
+          .sort({ [sortBy]: order === 'descending' ? -1 : 1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
 
-      if (lookups.length > 0) {
-        for (const lookup of lookups) {
-          if (!lookup || !lookup.$lookup || !lookup.$lookup.from) {
-            return { 
-              error: true, 
-              message: 'Invalid lookup configuration', 
-              data: [] 
-            };
-          }
-          const lookupCollection = lookup.$lookup.from;
-          const exists = collections.some((col) => col.name === lookupCollection);
-          if (exists) pipeline.push({ $lookup: lookup.$lookup });
+        const count = await collection.countDocuments(query);
+        const totalCount = await collection.countDocuments();
+
+        return { error: false, message: 'Data retrieved successfully', count, totalCount, data: documents };
+      }
+
+      if (moduleName.toLowerCase() === 'modules') {
+        const filtered = collections
+          .map((c) => c.name)
+          .filter((n) => !['schema', 'approle', 'appuser'].includes(n.toLowerCase()));
+        return { error: false, message: 'Module collections retrieved successfully', data: filtered };
+      }
+
+      if (moduleName.toLowerCase() === 'approle') {
+        const exclusionQuery = { ...query, 'sectionData.approle.role': { $ne: 'superadmin' } };
+        const documents = await collection
+          .find(exclusionQuery, { projection })
+          .sort({ [sortBy]: order === 'descending' ? -1 : 1 })
+          .skip(skip)
+          .limit(limit)
+          .toArray();
+
+        const count = await collection.countDocuments(exclusionQuery);
+        const totalCount = await collection.countDocuments();
+        return { error: false, message: 'Data retrieved successfully', count, totalCount, data: documents };
+      }
+
+      // 🔹 Normal collections
+      let reqQuery: any = { ...query };
+
+      const hasCompany = collections.some((c) => c.name === 'company');
+      const { userId, userDocId, roleObject, isSuperAdmin } = reqUserAuth || {};
+
+      if (hasCompany && !isSuperAdmin && moduleName !== 'company') {
+        if (!companyId) throw new BadRequestException('companyId is required for this operation');
+        reqQuery.companyId = companyId;
+      }
+
+      if (!isSuperAdmin && roleObject) {
+        const assignedFields = roleObject.sectionData.approle.modules
+          .find((mdl) => mdl.module === moduleName)?.assignedField || [];
+
+        if (assignedFields.length > 0) {
+          const userFilter = {
+            $or: assignedFields.map((field) => ({
+              $or: [
+                { companyId },
+                { [field]: userId },
+                { [field]: userDocId },
+              ],
+            })),
+          };
+          reqQuery = { ...reqQuery, ...userFilter };
         }
       }
 
-      if (Object.keys(projection).length > 0) {
-        pipeline.push({ $project: projection });
-      }
+      // 🔹 Build pipeline
+      const pipeline: any[] = [];
+      if (Object.keys(reqQuery).length) pipeline.push({ $match: reqQuery });
+
+      for (const lookup of lookups) pipeline.push(lookup);
+
+      if (Object.keys(projection).length) pipeline.push({ $project: projection });
 
       pipeline.push({ $sort: { [sortBy]: order === 'descending' ? -1 : 1 } });
-      pipeline.push({ $skip: Number(skip) });
-      pipeline.push({ $limit: Number(limit) });
 
-      if (companyId) {
-        pipeline.push({ $match: { companyId } });
-      } else {
-        pipeline.push({ $match: { companyId: { $exists: false } } });
-      }
+      const totalDocs = await collection.aggregate([...pipeline]).toArray();
+      const totalCount = totalDocs.length;
 
-      pipeline.push({ $addFields: { tableType: tableType || 'default' } });
+      if (skip > 0) pipeline.push({ $skip: skip });
+      if (limit > 0) pipeline.push({ $limit: limit });
 
-      // ✅ Execute aggregation and log for debugging
-      console.log('Aggregation pipeline:', pipeline);
-      const result = await collection.aggregate(pipeline).toArray();
-      console.log('Aggregation result:', result);
+      const documents = await collection.aggregate(pipeline).toArray();
+      const count = documents.length;
 
-      if (result.length === 0) {
-        return { 
-          error: false, 
-          message: 'No data found', 
-          data: [] 
-        };
-      }
+      return { error: false, message: 'Data retrieved successfully', count, totalCount, data: documents };
 
-      return { 
-        error: false, 
-        message: 'Data retrieved successfully', 
-        data: result 
-      };
+    } catch (err) {
+      const logMessage = `[${new Date().toISOString()}] Error in runAggregation\n${err.stack || err.message}\nBody: ${JSON.stringify(body)}\n`;
 
-    } catch (error) {
-      console.error('Error in runAggregation:', error);
-      return { 
-        error: true, 
-        message: 'Internal server error occurred', 
-        data: [] 
-      };
+      if (!fs.existsSync('logs')) fs.mkdirSync('logs');
+      fs.appendFileSync('logs/dynamicController.log', logMessage);
+
+      return { error: true, message: 'Internal server error', data: [] };
     }
   }
 }
