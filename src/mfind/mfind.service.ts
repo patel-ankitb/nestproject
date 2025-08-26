@@ -1,30 +1,22 @@
 import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
+import { ObjectId } from 'mongodb';
 import * as fs from 'fs';
 
 @Injectable()
 export class MFindService {
   private readonly JWT_SECRET = 'myStaticSecretKey';
-
-  // 🔹 AppName → DB Name mapping
   private AppDbMap: Record<string, string> = {};
-  
+
   constructor() {
     this.loadAppDbMap();
   }
 
-  /**
-   * Load appName → dbName mapping from a JSON file (by default 'app-db-map.json')
-   * You can override file path with APP_DB_MAP_FILE env var.
-   * Falls back to built-in default mapping if file not found or invalid.
-   */
   private loadAppDbMap(): void {
     const defaultMap: Record<string, string> = {
       'app6716866755631': 'dataproject',
-      // add more defaults if needed
     };
-
     const mapFile = process.env.APP_DB_MAP_FILE || 'app-db-map.json';
     try {
       if (fs.existsSync(mapFile)) {
@@ -35,37 +27,57 @@ export class MFindService {
           return;
         }
       }
-    } catch (e) {
-      // ignore and fall back to defaults
+    } catch {
+      // ignore errors and fall back
     }
-
     this.AppDbMap = defaultMap;
   }
 
   private getDbName(appName: string): string {
     const dbName = this.AppDbMap[appName];
-    if (!dbName) {
-      throw new BadRequestException(`App config not found for appName: ${appName}`);
-    }
+    if (!dbName) throw new BadRequestException(`App config not found for appName: ${appName}`);
     return dbName;
   }
 
   // ---------------- LOGIN ----------------
-  async login(body: any) {
-    const { username, password } = body;
-
-    if (username !== 'admin' || password !== 'admin1234') {
-      throw new UnauthorizedException('Invalid username or password');
+  async login(body: { appName: string; name: string; password: string }) {
+    const { appName, name, password } = body;
+    if (!name || !password) {
+      throw new BadRequestException('name and password are required');
     }
 
-    const token = jwt.sign({ username }, this.JWT_SECRET, { expiresIn: '1h' });
-    return { access_token: token };
+    const dbName = this.getDbName(appName);
+    const connection = mongoose.connection.useDb(dbName);
+
+    const appUser = await connection.collection('appuser').findOne({
+      'sectionData.appuser.name': name,
+      'sectionData.appuser.password': password, // ⚠️ plain text for now
+    });
+
+    if (!appUser) {
+      throw new UnauthorizedException('Invalid name or password');
+    }
+
+    const roleId = appUser.sectionData.appuser.selectedUser;
+    const payload = {
+      userId: appUser._id.toString(),
+      roleId,
+      name: appUser.sectionData.appuser.name,
+      companyId: appUser.sectionData.appuser.companyId,
+    };
+
+    const token = jwt.sign(payload, this.JWT_SECRET, { expiresIn: '1h' });
+
+    return {
+      message: 'Login successful',
+      access_token: token,
+      user: payload,
+    };
   }
 
   // ---------------- VERIFY TOKEN ----------------
   verifyToken(authHeader: string | undefined) {
     if (!authHeader) throw new UnauthorizedException('Authorization header is missing');
-
     if (!authHeader.toLowerCase().startsWith('bearer ')) {
       throw new UnauthorizedException('Authorization header must start with "Bearer "');
     }
@@ -80,16 +92,35 @@ export class MFindService {
     }
   }
 
+  // ✅ Helper to safely convert any string IDs to ObjectId
+  private deepConvertToObjectId(obj: any): any {
+    if (Array.isArray(obj)) {
+      return obj.map((item) => this.deepConvertToObjectId(item));
+    } else if (obj && typeof obj === 'object') {
+      const newObj: any = {};
+      for (const key of Object.keys(obj)) {
+        const value = obj[key];
+        if (
+          (key.toLowerCase() === '_id' || key.toLowerCase().endsWith('id')) &&
+          typeof value === 'string' &&
+          ObjectId.isValid(value)
+        ) {
+          newObj[key] = new ObjectId(value);
+        } else {
+          newObj[key] = this.deepConvertToObjectId(value);
+        }
+      }
+      return newObj;
+    }
+    return obj;
+  }
+
   // ---------------- RUN AGGREGATION ----------------
-  async runAggregation(body: any, headers: any, reqUserAuth?: any) {
-    const authHeader = Object.keys(headers).find((k) => k.toLowerCase() === 'authorization');
-    const token = authHeader ? headers[authHeader] : undefined;
-
-    if (!token) return { error: true, message: 'Authorization token required', data: [] };
-
+  async runAggregation(body: any, token: string, req: any) {
+    let decoded: any;
     try {
-      this.verifyToken(token);
-    } catch {
+      decoded = this.verifyToken(token);
+    } catch (err) {
       return { error: true, message: 'Invalid or expired authorization token', data: [] };
     }
 
@@ -104,7 +135,6 @@ export class MFindService {
       sortBy = '_id',
       lookups = [],
       companyId,
-      tableType,
     } = body;
 
     if (!appName || !moduleName) {
@@ -112,17 +142,11 @@ export class MFindService {
     }
 
     try {
-      // 🔹 Map appName → dbName
       const dbName = this.getDbName(appName);
-
-      // 1️ Connect to DB
       const connection = mongoose.connection.useDb(dbName);
-      console.log(`Connected to database: ${dbName} (from appName: ${appName})`);
 
-      //  Safe null check
-      const collections = connection?.db
-        ? await connection.db.listCollections().toArray()
-        : [];
+      const rawCollections = await (connection.db?.listCollections().toArray() ?? []);
+      const collections = Array.isArray(rawCollections) ? rawCollections : [];
       const collectionExists = collections.some((c) => c.name === moduleName);
       if (!collectionExists && moduleName.toLowerCase() !== 'modules') {
         return { error: true, message: `Collection ${moduleName} not found`, data: [] };
@@ -130,67 +154,66 @@ export class MFindService {
 
       const collection = connection.collection(moduleName);
 
-      // 🔹 Special cases
-      if (
-        ['chat', 'mobileappdesign', 'mobileappdesign1', 'mobileappdesign2', 'mobileappdesign3']
-          .includes(moduleName.toLowerCase())
-      ) {
-        const documents = await collection
-          .find(query, { projection })
+      // 🔹 Special modules
+      if (['chat', 'mobileappdesign', 'mobileappdesign1', 'mobileappdesign2', 'mobileappdesign3'].includes(moduleName.toLowerCase())) {
+        const documents = await collection.find(this.deepConvertToObjectId(query), { projection })
           .sort({ [sortBy]: order === 'descending' ? -1 : 1 })
           .skip(skip)
           .limit(limit)
           .toArray();
-
-        const count = await collection.countDocuments(query);
-        const totalCount = await collection.countDocuments();
-
-        return { error: false, message: 'Data retrieved successfully', count, totalCount, data: documents };
+        const count = await collection.countDocuments(this.deepConvertToObjectId(query));
+        return { error: false, message: 'Data retrieved successfully', count, data: documents };
       }
 
       if (moduleName.toLowerCase() === 'modules') {
-        const filtered = collections
-          .map((c) => c.name)
+        const filtered = collections.map((c) => c.name)
           .filter((n) => !['schema', 'approle', 'appuser'].includes(n.toLowerCase()));
         return { error: false, message: 'Module collections retrieved successfully', data: filtered };
       }
 
       if (moduleName.toLowerCase() === 'approle') {
         const exclusionQuery = { ...query, 'sectionData.approle.role': { $ne: 'superadmin' } };
-        const documents = await collection
-          .find(exclusionQuery, { projection })
+        const documents = await collection.find(this.deepConvertToObjectId(exclusionQuery), { projection })
           .sort({ [sortBy]: order === 'descending' ? -1 : 1 })
           .skip(skip)
           .limit(limit)
           .toArray();
-
-        const count = await collection.countDocuments(exclusionQuery);
-        const totalCount = await collection.countDocuments();
-        return { error: false, message: 'Data retrieved successfully', count, totalCount, data: documents };
+        const count = await collection.countDocuments(this.deepConvertToObjectId(exclusionQuery));
+        return { error: false, message: 'Data retrieved successfully', count, data: documents };
       }
 
       // 🔹 Normal collections
-      let reqQuery: any = { ...query };
-
+      let reqQuery: any = this.deepConvertToObjectId(query);
       const hasCompany = collections.some((c) => c.name === 'company');
-      const { userId, userDocId, roleObject, isSuperAdmin } = reqUserAuth || {};
 
-      if (hasCompany && !isSuperAdmin && moduleName !== 'company') {
-        if (!companyId) throw new BadRequestException('companyId is required for this operation');
-        reqQuery.companyId = companyId;
-      }
+      // ✅ FIXED: safe ObjectId conversion for user/role
+      const userId = decoded.userId && mongoose.Types.ObjectId.isValid(decoded.userId)
+        ? new mongoose.Types.ObjectId(decoded.userId)
+        : decoded.userId;
 
-      if (!isSuperAdmin && roleObject) {
-        const assignedFields = roleObject.sectionData.approle.modules
-          .find((mdl) => mdl.module === moduleName)?.assignedField || [];
+      const roleId = decoded.roleId && mongoose.Types.ObjectId.isValid(decoded.roleId)
+        ? new mongoose.Types.ObjectId(decoded.roleId)
+        : decoded.roleId;
+
+      const user = await connection.collection('appuser').findOne({ _id: userId });
+      const role = await connection.collection('approle').findOne({ _id: roleId });
+
+      const isSuperAdmin = role?.sectionData?.approle?.role === 'superadmin';
+
+      if (hasCompany && !isSuperAdmin && moduleName !== 'company' && role?.sectionData?.approle?.issaasrole !== true) {
+        if (!companyId) {
+          return { error: true, message: 'companyId is required for this operation', data: [] };
+        }
+
+        const assignedFields = role?.sectionData?.approle?.modules
+          ?.find((mdl) => mdl.module === moduleName)?.assignedField || [];
 
         if (assignedFields.length > 0) {
           const userFilter = {
             $or: assignedFields.map((field) => ({
               $or: [
                 { companyId },
-                { [field]: userId },
-                { [field]: userDocId },
+                { [field]: decoded.userId },
               ],
             })),
           };
@@ -198,18 +221,14 @@ export class MFindService {
         }
       }
 
-      // 🔹 Build pipeline
+      // Build pipeline
       const pipeline: any[] = [];
       if (Object.keys(reqQuery).length) pipeline.push({ $match: reqQuery });
-
-      for (const lookup of lookups) pipeline.push(lookup);
-
+      for (const lookup of lookups) pipeline.push(this.deepConvertToObjectId(lookup));
       if (Object.keys(projection).length) pipeline.push({ $project: projection });
-
       pipeline.push({ $sort: { [sortBy]: order === 'descending' ? -1 : 1 } });
 
       const totalDocs = await collection.aggregate([...pipeline]).toArray();
-      const totalCount = totalDocs.length;
 
       if (skip > 0) pipeline.push({ $skip: skip });
       if (limit > 0) pipeline.push({ $limit: limit });
@@ -217,15 +236,10 @@ export class MFindService {
       const documents = await collection.aggregate(pipeline).toArray();
       const count = documents.length;
 
-      return { error: false, message: 'Data retrieved successfully', count, totalCount, data: documents };
-
-    } catch (err) {
-      const logMessage = `[${new Date().toISOString()}] Error in runAggregation\n${err.stack || err.message}\nBody: ${JSON.stringify(body)}\n`;
-
-      if (!fs.existsSync('logs')) fs.mkdirSync('logs');
-      fs.appendFileSync('logs/dynamicController.log', logMessage);
-
-      return { error: true, message: 'Internal server error', data: [] };
+      return { error: false, message: 'Data retrieved successfully', count, data: documents };
+    } catch (err: any) {
+      console.error('runAggregation error:', err);
+      return { error: true, message: err.message || 'Internal server error', data: [] };
     }
   }
 }
