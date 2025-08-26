@@ -6,7 +6,7 @@ import * as fs from 'fs';
 
 @Injectable()
 export class MFindService {
-  private readonly JWT_SECRET = 'myStaticSecretKey';
+  private readonly JWT_SECRET: string = process.env.JWT_SECRET || 'myStaticSecretKey';
   private AppDbMap: Record<string, string> = {};
 
   constructor() {
@@ -28,13 +28,14 @@ export class MFindService {
         }
       }
     } catch {
-      // ignore errors and fall back
+      console.warn('Failed to load app-db-map.json, using default map');
     }
     this.AppDbMap = defaultMap;
   }
 
   private getDbName(appName: string): string {
-    const dbName = this.AppDbMap[appName];
+    if (!appName) throw new BadRequestException('appName is required');
+    const dbName = this.AppDbMap[appName.toLowerCase()];
     if (!dbName) throw new BadRequestException(`App config not found for appName: ${appName}`);
     return dbName;
   }
@@ -42,29 +43,34 @@ export class MFindService {
   // ---------------- LOGIN ----------------
   async login(body: { appName: string; name: string; password: string }) {
     const { appName, name, password } = body;
-    if (!name || !password) {
-      throw new BadRequestException('name and password are required');
-    }
+    if (!name || !password) throw new BadRequestException('name and password are required');
 
     const dbName = this.getDbName(appName);
     const connection = mongoose.connection.useDb(dbName);
 
-    const appUser = await connection.collection('appuser').findOne({
-      'sectionData.appuser.name': name,
-      'sectionData.appuser.password': password, // ⚠️ plain text for now
-    });
+    const appUser = await connection.collection('appuser').findOne(
+      {
+        'sectionData.appuser.name': name,
+        'sectionData.appuser.password': password,
+      },
+      { collation: { locale: 'en', strength: 2 } }
+    );
 
-    if (!appUser) {
-      throw new UnauthorizedException('Invalid name or password');
-    }
+    if (!appUser) throw new UnauthorizedException('Invalid name or password');
 
-    const roleId = appUser.sectionData.appuser.selectedUser;
+    const roleId = appUser?.sectionData?.appuser?.role;
+    if (!roleId) throw new BadRequestException('User role not configured');
+
+    if (!appUser._id) throw new BadRequestException('User _id is missing or invalid');
+
     const payload = {
       userId: appUser._id.toString(),
-      roleId,
-      name: appUser.sectionData.appuser.name,
-      companyId: appUser.sectionData.appuser.companyId,
+      roleId: roleId.toString(),
+      name: appUser.sectionData?.appuser?.name ?? name,
+      companyId: appUser.sectionData?.appuser?.companyId,
     };
+
+    console.log('Login payload:', payload); // Debug log, remove in production
 
     const token = jwt.sign(payload, this.JWT_SECRET, { expiresIn: '1h' });
 
@@ -78,25 +84,33 @@ export class MFindService {
   // ---------------- VERIFY TOKEN ----------------
   verifyToken(authHeader: string | undefined) {
     if (!authHeader) throw new UnauthorizedException('Authorization header is missing');
-    if (!authHeader.toLowerCase().startsWith('bearer ')) {
+    if (!authHeader.toLowerCase().startsWith('bearer '))
       throw new UnauthorizedException('Authorization header must start with "Bearer "');
-    }
-
     const token = authHeader.slice(7).trim();
     if (!token) throw new UnauthorizedException('Token is missing');
 
     try {
-      return jwt.verify(token, this.JWT_SECRET);
+      const decoded = jwt.verify(token, this.JWT_SECRET);
+      if (!decoded || typeof decoded !== 'object' || !decoded.userId || !decoded.roleId) {
+        throw new UnauthorizedException('Invalid token payload: userId or roleId missing');
+      }
+      if (typeof decoded.userId !== 'string' || decoded.userId.trim() === '') {
+        throw new UnauthorizedException('Invalid token payload: userId must be a non-empty string');
+      }
+      if (typeof decoded.roleId !== 'string' || decoded.roleId.trim() === '') {
+        throw new UnauthorizedException('Invalid token payload: roleId must be a non-empty string');
+      }
+      console.log('Decoded token by bhumi:', decoded);
+
+      return decoded;
     } catch {
       throw new UnauthorizedException('Invalid or expired token');
     }
   }
 
-  // ✅ Helper to safely convert any string IDs to ObjectId
   private deepConvertToObjectId(obj: any): any {
-    if (Array.isArray(obj)) {
-      return obj.map((item) => this.deepConvertToObjectId(item));
-    } else if (obj && typeof obj === 'object') {
+    if (Array.isArray(obj)) return obj.map((item) => this.deepConvertToObjectId(item));
+    if (obj && typeof obj === 'object') {
       const newObj: any = {};
       for (const key of Object.keys(obj)) {
         const value = obj[key];
@@ -120,8 +134,9 @@ export class MFindService {
     let decoded: any;
     try {
       decoded = this.verifyToken(token);
-    } catch (err) {
-      return { error: true, message: 'Invalid or expired authorization token', data: [] };
+      console.log('Decoded token:', decoded); // Debug log, remove in production
+    } catch (err: any) {
+      return { error: true, message: err.message || 'Invalid or expired authorization token', data: [] };
     }
 
     const {
@@ -137,109 +152,200 @@ export class MFindService {
       companyId,
     } = body;
 
-    if (!appName || !moduleName) {
-      throw new BadRequestException('appName (DB) and moduleName (Collection) are required');
-    }
+    if (!appName || !moduleName) throw new BadRequestException('appName and moduleName are required');
 
     try {
       const dbName = this.getDbName(appName);
       const connection = mongoose.connection.useDb(dbName);
 
-      const rawCollections = await (connection.db?.listCollections().toArray() ?? []);
-      const collections = Array.isArray(rawCollections) ? rawCollections : [];
-      const collectionExists = collections.some((c) => c.name === moduleName);
-      if (!collectionExists && moduleName.toLowerCase() !== 'modules') {
+      const collections = (await connection.db?.listCollections().toArray()) ?? [];
+      const collectionInfo = collections.find((c) => c.name.toLowerCase() === moduleName.toLowerCase());
+
+      if (!collectionInfo && moduleName.toLowerCase() !== 'modules')
         return { error: true, message: `Collection ${moduleName} not found`, data: [] };
+
+      const collection = connection.collection(collectionInfo?.name || moduleName);
+
+      // ---- User & Role check ----
+      const userId = decoded.userId;
+      const roleId = decoded.roleId;
+
+      console.log('Querying appuser with userId:', userId, 'Type:', typeof userId); // Debug log
+      let user;
+      try {
+        user = await connection.collection('appuser').findOne(
+          { _id: this.convertToId(userId) },
+          // No collation for _id, as it's binary for ObjectId or exact match for strings
+        );
+      } catch (err: any) {
+        console.error('Error querying appuser:', err);
+        return { error: true, message: `Error querying user: ${err.message}`, data: [] };
+      }
+      if (!user) return { error: true, message: 'User not found', data: [] };
+
+      console.log('Querying approle with roleId:', roleId, 'Type:', typeof roleId); // Debug log
+      let role;
+      try {
+        role = await connection.collection('approle').findOne(
+          { _id: this.convertToId(roleId) },
+          // No collation for _id
+        );
+      } catch (err: any) {
+        console.error('Error querying approle:', err);
+        return { error: true, message: `Error querying role: ${err.message}`, data: [] };
+      }
+      if (!role) return { error: true, message: 'Role not found', data: [] };
+
+      const isSuperAdmin = role?.sectionData?.approle?.role?.toLowerCase() === 'superadmin';
+      const assignedModules = role?.sectionData?.approle?.modules?.map((m) => m.module.toLowerCase()) || [];
+      const requestedModule = moduleName.toLowerCase();
+
+      if (!isSuperAdmin && !assignedModules.includes(requestedModule)) {
+        return { error: true, message: `Access denied for module: ${moduleName}`, data: [] };
       }
 
-      const collection = connection.collection(moduleName);
-
-      // 🔹 Special modules
-      if (['chat', 'mobileappdesign', 'mobileappdesign1', 'mobileappdesign2', 'mobileappdesign3'].includes(moduleName.toLowerCase())) {
-        const documents = await collection.find(this.deepConvertToObjectId(query), { projection })
-          .sort({ [sortBy]: order === 'descending' ? -1 : 1 })
-          .skip(skip)
-          .limit(limit)
-          .toArray();
-        const count = await collection.countDocuments(this.deepConvertToObjectId(query));
-        return { error: false, message: 'Data retrieved successfully', count, data: documents };
-      }
-
-      if (moduleName.toLowerCase() === 'modules') {
-        const filtered = collections.map((c) => c.name)
-          .filter((n) => !['schema', 'approle', 'appuser'].includes(n.toLowerCase()));
-        return { error: false, message: 'Module collections retrieved successfully', data: filtered };
-      }
-
-      if (moduleName.toLowerCase() === 'approle') {
-        const exclusionQuery = { ...query, 'sectionData.approle.role': { $ne: 'superadmin' } };
-        const documents = await collection.find(this.deepConvertToObjectId(exclusionQuery), { projection })
-          .sort({ [sortBy]: order === 'descending' ? -1 : 1 })
-          .skip(skip)
-          .limit(limit)
-          .toArray();
-        const count = await collection.countDocuments(this.deepConvertToObjectId(exclusionQuery));
-        return { error: false, message: 'Data retrieved successfully', count, data: documents };
-      }
-
-      // 🔹 Normal collections
+      // ---- Query & Company filter ----
       let reqQuery: any = this.deepConvertToObjectId(query);
-      const hasCompany = collections.some((c) => c.name === 'company');
-
-      // ✅ FIXED: safe ObjectId conversion for user/role
-      const userId = decoded.userId && mongoose.Types.ObjectId.isValid(decoded.userId)
-        ? new mongoose.Types.ObjectId(decoded.userId)
-        : decoded.userId;
-
-      const roleId = decoded.roleId && mongoose.Types.ObjectId.isValid(decoded.roleId)
-        ? new mongoose.Types.ObjectId(decoded.roleId)
-        : decoded.roleId;
-
-      const user = await connection.collection('appuser').findOne({ _id: userId });
-      const role = await connection.collection('approle').findOne({ _id: roleId });
-
-      const isSuperAdmin = role?.sectionData?.approle?.role === 'superadmin';
-
-      if (hasCompany && !isSuperAdmin && moduleName !== 'company' && role?.sectionData?.approle?.issaasrole !== true) {
-        if (!companyId) {
-          return { error: true, message: 'companyId is required for this operation', data: [] };
-        }
-
-        const assignedFields = role?.sectionData?.approle?.modules
-          ?.find((mdl) => mdl.module === moduleName)?.assignedField || [];
-
+      if (
+        collections.some((c) => c.name === 'company') &&
+        !isSuperAdmin &&
+        moduleName !== 'company' &&
+        role?.sectionData?.approle?.issaasrole !== true
+      ) {
+        if (!companyId) return { error: true, message: 'companyId is required for this operation', data: [] };
+        const assignedFields =
+          role?.sectionData?.approle?.modules?.find(
+            (mdl) => mdl.module.toLowerCase() === moduleName.toLowerCase(),
+          )?.assignedField || [];
         if (assignedFields.length > 0) {
           const userFilter = {
             $or: assignedFields.map((field) => ({
-              $or: [
-                { companyId },
-                { [field]: decoded.userId },
-              ],
+              $or: [{ companyId }, { [field]: userId }],
             })),
           };
           reqQuery = { ...reqQuery, ...userFilter };
         }
       }
 
-      // Build pipeline
+      // ---- Aggregation pipeline ----
       const pipeline: any[] = [];
       if (Object.keys(reqQuery).length) pipeline.push({ $match: reqQuery });
       for (const lookup of lookups) pipeline.push(this.deepConvertToObjectId(lookup));
       if (Object.keys(projection).length) pipeline.push({ $project: projection });
       pipeline.push({ $sort: { [sortBy]: order === 'descending' ? -1 : 1 } });
-
-      const totalDocs = await collection.aggregate([...pipeline]).toArray();
-
       if (skip > 0) pipeline.push({ $skip: skip });
       if (limit > 0) pipeline.push({ $limit: limit });
 
       const documents = await collection.aggregate(pipeline).toArray();
-      const count = documents.length;
-
-      return { error: false, message: 'Data retrieved successfully', count, data: documents };
+      return { error: false, message: 'Data retrieved successfully', count: documents.length, data: documents };
     } catch (err: any) {
       console.error('runAggregation error:', err);
       return { error: true, message: err.message || 'Internal server error', data: [] };
     }
+  }
+
+  // ---------------- GET ROLE BY ID ----------------
+  async getRoleById(appName: string, roleId: string) {
+    if (!appName || !roleId) throw new BadRequestException('appName and roleId are required');
+
+    const dbName = this.getDbName(appName);
+    const connection = mongoose.connection.useDb(dbName);
+
+    console.log('Querying approle with roleId:', roleId, 'Type:', typeof roleId); // Debug log
+    let role;
+    try {
+      role = await connection.collection('approle').findOne(
+        { _id: this.convertToId(roleId) },
+        // No collation for _id
+      );
+    } catch (err: any) {
+      console.error('Error querying approle:', err);
+      return { error: true, message: `Error querying role: ${err.message}`, data: null };
+    }
+    if (!role) return { error: true, message: 'Role not found', data: null };
+
+    return {
+      error: false,
+      message: 'Role retrieved successfully',
+      data: {
+        roleId: role._id,
+        roleName: role?.sectionData?.approle?.role ?? 'Unknown',
+        modules: role?.sectionData?.approle?.modules || [],
+      },
+    };
+  }
+
+  // ---------------- GET MODULE COUNT PER ROLE ----------------
+  async getRoleModulesCount(appName: string) {
+    if (!appName) throw new BadRequestException('appName is required');
+
+    const dbName = this.getDbName(appName);
+    const connection = mongoose.connection.useDb(dbName);
+
+    const roles = await connection.collection('approle').find({}, {
+      collation: { locale: 'en', strength: 2 },
+    }).toArray();
+    const result = roles.map((role) => ({
+      roleId: role._id,
+      roleName: role?.sectionData?.approle?.role || 'Unknown',
+      moduleCount: role?.sectionData?.approle?.modules?.length || 0,
+      modules: role?.sectionData?.approle?.modules?.map((m) => m.module) || [],
+    }));
+
+    return { error: false, message: 'Module count per role retrieved successfully', data: result };
+  }
+
+  // ---------------- CHECK USER ACCESS ----------------
+  async checkUserAccess(userId: string, moduleName: string, appName: string) {
+    if (!userId || !moduleName || !appName) {
+      throw new BadRequestException('userId, moduleName, and appName are required');
+    }
+
+    const dbName = this.getDbName(appName);
+    const connection = mongoose.connection.useDb(dbName);
+
+    console.log('Querying appuser with userId:', userId, 'Type:', typeof userId); // Debug log
+    let user;
+    try {
+      user = await connection.collection('appuser').findOne(
+        { _id: this.convertToId(userId) },
+        // No collation for _id
+      );
+    } catch (err: any) {
+      console.error('Error querying appuser:', err);
+      return { error: true, message: `Error querying user: ${err.message}`, access: false };
+    }
+    if (!user) return { error: true, message: 'User not found', access: false };
+
+    const roleId = user?.sectionData?.appuser?.role;
+    if (!roleId) {
+      return { error: true, message: 'Invalid or missing roleId for user', access: false };
+    }
+
+    console.log('Querying approle with roleId:', roleId, 'Type:', typeof roleId); // Debug log
+    let role;
+    try {
+      role = await connection.collection('approle').findOne(
+        { _id: roleId },
+        // No collation for _id
+      );
+    } catch (err: any) {
+      console.error('Error querying approle:', err);
+      return { error: true, message: `Error querying role: ${err.message}`, access: false };
+    }
+    if (!role) return { error: true, message: 'Role not found', access: false };
+
+    const modules = role?.sectionData?.approle?.modules?.map((m) => m.module.toLowerCase()) || [];
+    const hasAccess = modules.includes(moduleName.toLowerCase());
+
+    return {
+      error: false,
+      access: hasAccess,
+      roleName: role?.sectionData?.approle?.role ?? 'Unknown',
+    };
+  }
+
+  private convertToId(id: string): any {
+    return mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id;
   }
 }
