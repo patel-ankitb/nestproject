@@ -7,81 +7,170 @@ import * as fs from 'fs';
 @Injectable()
 export class MFindService {
   private readonly JWT_SECRET: string = process.env.JWT_SECRET || 'myStaticSecretKey';
-  private AppDbMap: Record<string, string> = {};
+  private AppDbMap = new Map<string, string>();
+  private readonly mapFile: string = process.env.APP_DB_MAP_FILE || 'app-db-map.json';
 
   constructor() {
     this.loadAppDbMap();
   }
 
+  // ---------------- DYNAMIC APP-DB MAPPING METHODS ----------------
   private loadAppDbMap(): void {
-    const defaultMap: Record<string, string> = {
-      'app6716866755631': 'dataproject',
-    };
-    const mapFile = process.env.APP_DB_MAP_FILE || 'app-db-map.json';
     try {
-      if (fs.existsSync(mapFile)) {
-        const raw = fs.readFileSync(mapFile, 'utf8');
+      if (fs.existsSync(this.mapFile)) {
+        const raw = fs.readFileSync(this.mapFile, 'utf8');
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
-          this.AppDbMap = { ...defaultMap, ...parsed };
-          return;
+          // Convert object to Map
+          Object.entries(parsed).forEach(([key, value]) => {
+            this.AppDbMap.set(key.toLowerCase(), value as string);
+          });
         }
       }
-    } catch {
-      console.warn('Failed to load app-db-map.json, using default map');
+    } catch (error) {
+      console.warn('Failed to load app-db-map.json, starting with empty map');
     }
-    this.AppDbMap = defaultMap;
+    
+    // Set default mapping if empty
+    if (this.AppDbMap.size === 0) {
+      // this.AppDbMap.set('app6716866755631', 'dataproject');
+      this.saveAppDbMap(); // Save default to file
+    }
+    
+    console.log('Loaded AppDbMap:', Array.from(this.AppDbMap.entries()));
+  }
+
+  private saveAppDbMap(): void {
+    try {
+      const mapObject = Object.fromEntries(this.AppDbMap);
+      fs.writeFileSync(this.mapFile, JSON.stringify(mapObject, null, 2));
+      console.log('AppDbMap saved successfully');
+    } catch (error) {
+      console.error('Failed to save AppDbMap:', error);
+    }
+  }
+
+  // Add new app-db mapping dynamically
+  public addAppDbMapping(appName: string, dbName: string): boolean {
+    if (!appName || !dbName) {
+      throw new BadRequestException('appName and dbName are required');
+    }
+    
+    this.AppDbMap.set(appName.toLowerCase(), dbName);
+    this.saveAppDbMap();
+    console.log(`Added mapping: ${appName} -> ${dbName}`);
+    return true;
+  }
+
+  // Remove app-db mapping
+  public removeAppDbMapping(appName: string): boolean {
+    if (!appName) {
+      throw new BadRequestException('appName is required');
+    }
+    
+    const removed = this.AppDbMap.delete(appName.toLowerCase());
+    if (removed) {
+      this.saveAppDbMap();
+      console.log(`Removed mapping for: ${appName}`);
+    }
+    return removed;
+  }
+
+  // Get all mappings
+  public getAllAppDbMappings(): Array<{appName: string, dbName: string}> {
+    return Array.from(this.AppDbMap.entries()).map(([appName, dbName]) => ({
+      appName,
+      dbName
+    }));
+  }
+
+  // Update existing mapping
+  public updateAppDbMapping(appName: string, newDbName: string): boolean {
+    if (!appName || !newDbName) {
+      throw new BadRequestException('appName and newDbName are required');
+    }
+    
+    const key = appName.toLowerCase();
+    if (this.AppDbMap.has(key)) {
+      this.AppDbMap.set(key, newDbName);
+      this.saveAppDbMap();
+      console.log(`Updated mapping: ${appName} -> ${newDbName}`);
+      return true;
+    }
+    return false;
+  }
+
+  // Check if mapping exists
+  public hasAppDbMapping(appName: string): boolean {
+    return this.AppDbMap.has(appName.toLowerCase());
   }
 
   private getDbName(appName: string): string {
     if (!appName) throw new BadRequestException('appName is required');
-    const dbName = this.AppDbMap[appName.toLowerCase()];
-    if (!dbName) throw new BadRequestException(`App config not found for appName: ${appName}`);
+    
+    const dbName = this.AppDbMap.get(appName.toLowerCase());
+    if (!dbName) {
+      // Optionally auto-create mapping if not found
+      const autoDbName = `db_${appName.toLowerCase()}`;
+      console.warn(`App config not found for appName: ${appName}, creating auto-mapping to: ${autoDbName}`);
+      this.addAppDbMapping(appName, autoDbName);
+      return autoDbName;
+    }
     return dbName;
   }
 
-  // ---------------- LOGIN ----------------
+  // ---------------- ENHANCED LOGIN WITH DYNAMIC DB ----------------
   async login(body: { appName: string; name: string; password: string }) {
     const { appName, name, password } = body;
     if (!name || !password) throw new BadRequestException('name and password are required');
 
+    // Get or create dynamic DB mapping
     const dbName = this.getDbName(appName);
     const connection = mongoose.connection.useDb(dbName);
 
-    const appUser = await connection.collection('appuser').findOne(
-      {
+    console.log('Dynamic login - Querying with:', { appName, dbName, name }); // Don't log password
+
+    try {
+      const appUser = await connection.collection('appuser').findOne({
         'sectionData.appuser.name': name,
         'sectionData.appuser.password': password,
-      },
-      { collation: { locale: 'en', strength: 2 } }
-    );
+      });
 
-    if (!appUser) throw new UnauthorizedException('Invalid name or password');
+      if (!appUser) throw new UnauthorizedException('Invalid name or password');
 
-    const roleId = appUser?.sectionData?.appuser?.role;
-    if (!roleId) throw new BadRequestException('User role not configured');
+      const roleId = appUser?.sectionData?.appuser?.role;
+      if (!roleId) throw new BadRequestException('User role not configured');
 
-    if (!appUser._id) throw new BadRequestException('User _id is missing or invalid');
+      if (!appUser._id) throw new BadRequestException('User _id is missing or invalid');
 
-    const payload = {
-      userId: appUser._id.toString(),
-      roleId: roleId.toString(),
-      name: appUser.sectionData?.appuser?.name ?? name,
-      companyId: appUser.sectionData?.appuser?.companyId,
-    };
+      const payload = {
+        userId: appUser._id.toString(),
+        roleId: roleId.toString(),
+        name: appUser.sectionData?.appuser?.name ?? name,
+        companyId: appUser.sectionData?.appuser?.companyId,
+        appName: appName, // Include appName in token
+        dbName: dbName    // Include dbName in token
+      };
 
-    console.log('Login payload:', payload); // Debug log, remove in production
+      const token = jwt.sign(payload, this.JWT_SECRET, { expiresIn: '1h' });
 
-    const token = jwt.sign(payload, this.JWT_SECRET, { expiresIn: '1h' });
-
-    return {
-      message: 'Login successful',
-      access_token: token,
-      user: payload,
-    };
+      return {
+        message: 'Login successful',
+        access_token: token,
+        user: payload,
+        mappingInfo: {
+          appName,
+          dbName,
+          isAutoCreated: !this.AppDbMap.has(appName.toLowerCase()) // Indicates if mapping was auto-created
+        }
+      };
+    } catch (error) {
+      console.error('Login error:', error);
+      throw error;
+    }
   }
 
-  // ---------------- VERIFY TOKEN ----------------
+  // ---------------- ENHANCED VERIFY TOKEN ----------------
   verifyToken(authHeader: string | undefined) {
     if (!authHeader) throw new UnauthorizedException('Authorization header is missing');
     if (!authHeader.toLowerCase().startsWith('bearer '))
@@ -100,10 +189,20 @@ export class MFindService {
       if (typeof decoded.roleId !== 'string' || decoded.roleId.trim() === '') {
         throw new UnauthorizedException('Invalid token payload: roleId must be a non-empty string');
       }
-      console.log('Decoded token by bhumi:', decoded);
 
+      // Validate appName and dbName in token
+      if (decoded.appName && decoded.dbName) {
+        const currentDbName = this.AppDbMap.get(decoded.appName.toLowerCase());
+        if (currentDbName && currentDbName !== decoded.dbName) {
+          console.warn(`Token has outdated dbName. Token: ${decoded.dbName}, Current: ${currentDbName}`);
+          // Update token with current mapping
+          decoded.dbName = currentDbName;
+        }
+      }
+
+      console.log('Decoded dynamic token:', decoded);
       return decoded;
-    } catch {
+    } catch (error) {
       throw new UnauthorizedException('Invalid or expired token');
     }
   }
@@ -129,12 +228,12 @@ export class MFindService {
     return obj;
   }
 
-  // ---------------- RUN AGGREGATION ----------------
+  // ---------------- ENHANCED RUN AGGREGATION WITH DYNAMIC DB ----------------
   async runAggregation(body: any, token: string, req: any) {
     let decoded: any;
     try {
       decoded = this.verifyToken(token);
-      console.log('Decoded token:', decoded); // Debug log, remove in production
+      console.log('Decoded token for aggregation:', decoded);
     } catch (err: any) {
       return { error: true, message: err.message || 'Invalid or expired authorization token', data: [] };
     }
@@ -155,14 +254,17 @@ export class MFindService {
     if (!appName || !moduleName) throw new BadRequestException('appName and moduleName are required');
 
     try {
+      // Use dynamic DB mapping
       const dbName = this.getDbName(appName);
       const connection = mongoose.connection.useDb(dbName);
+
+      console.log(`Using dynamic DB: ${appName} -> ${dbName}`);
 
       const collections = (await connection.db?.listCollections().toArray()) ?? [];
       const collectionInfo = collections.find((c) => c.name.toLowerCase() === moduleName.toLowerCase());
 
       if (!collectionInfo && moduleName.toLowerCase() !== 'modules')
-        return { error: true, message: `Collection ${moduleName} not found`, data: [] };
+        return { error: true, message: `Collection ${moduleName} not found in ${dbName}`, data: [] };
 
       const collection = connection.collection(collectionInfo?.name || moduleName);
 
@@ -170,26 +272,20 @@ export class MFindService {
       const userId = decoded.userId;
       const roleId = decoded.roleId;
 
-      console.log('Querying appuser with userId:', userId, 'Type:', typeof userId); // Debug log
+      console.log('Querying appuser with userId:', userId, 'Type:', typeof userId);
       let user;
       try {
-        user = await connection.collection('appuser').findOne(
-          { _id: this.convertToId(userId) },
-          // No collation for _id, as it's binary for ObjectId or exact match for strings
-        );
+        user = await connection.collection('appuser').findOne({ _id: this.convertToId(userId) });
       } catch (err: any) {
         console.error('Error querying appuser:', err);
         return { error: true, message: `Error querying user: ${err.message}`, data: [] };
       }
       if (!user) return { error: true, message: 'User not found', data: [] };
 
-      console.log('Querying approle with roleId:', roleId, 'Type:', typeof roleId); // Debug log
+      console.log('Querying approle with roleId:', roleId, 'Type:', typeof roleId);
       let role;
       try {
-        role = await connection.collection('approle').findOne(
-          { _id: this.convertToId(roleId) },
-          // No collation for _id
-        );
+        role = await connection.collection('approle').findOne({ _id: this.convertToId(roleId) });
       } catch (err: any) {
         console.error('Error querying approle:', err);
         return { error: true, message: `Error querying role: ${err.message}`, data: [] };
@@ -237,7 +333,13 @@ export class MFindService {
       if (limit > 0) pipeline.push({ $limit: limit });
 
       const documents = await collection.aggregate(pipeline).toArray();
-      return { error: false, message: 'Data retrieved successfully', count: documents.length, data: documents };
+      return { 
+        error: false, 
+        message: 'Data retrieved successfully', 
+        count: documents.length, 
+        data: documents,
+        dbInfo: { appName, dbName } // Include DB info in response
+      };
     } catch (err: any) {
       console.error('runAggregation error:', err);
       return { error: true, message: err.message || 'Internal server error', data: [] };
@@ -251,13 +353,10 @@ export class MFindService {
     const dbName = this.getDbName(appName);
     const connection = mongoose.connection.useDb(dbName);
 
-    console.log('Querying approle with roleId:', roleId, 'Type:', typeof roleId); // Debug log
+    console.log('Querying approle with roleId:', roleId, 'Type:', typeof roleId);
     let role;
     try {
-      role = await connection.collection('approle').findOne(
-        { _id: this.convertToId(roleId) },
-        // No collation for _id
-      );
+      role = await connection.collection('approle').findOne({ _id: this.convertToId(roleId) });
     } catch (err: any) {
       console.error('Error querying approle:', err);
       return { error: true, message: `Error querying role: ${err.message}`, data: null };
@@ -272,6 +371,7 @@ export class MFindService {
         roleName: role?.sectionData?.approle?.role ?? 'Unknown',
         modules: role?.sectionData?.approle?.modules || [],
       },
+      dbInfo: { appName, dbName }
     };
   }
 
@@ -292,7 +392,12 @@ export class MFindService {
       modules: role?.sectionData?.approle?.modules?.map((m) => m.module) || [],
     }));
 
-    return { error: false, message: 'Module count per role retrieved successfully', data: result };
+    return { 
+      error: false, 
+      message: 'Module count per role retrieved successfully', 
+      data: result,
+      dbInfo: { appName, dbName }
+    };
   }
 
   // ---------------- CHECK USER ACCESS ----------------
@@ -304,13 +409,10 @@ export class MFindService {
     const dbName = this.getDbName(appName);
     const connection = mongoose.connection.useDb(dbName);
 
-    console.log('Querying appuser with userId:', userId, 'Type:', typeof userId); // Debug log
+    console.log('Querying appuser with userId:', userId, 'Type:', typeof userId);
     let user;
     try {
-      user = await connection.collection('appuser').findOne(
-        { _id: this.convertToId(userId) },
-        // No collation for _id
-      );
+      user = await connection.collection('appuser').findOne({ _id: this.convertToId(userId) });
     } catch (err: any) {
       console.error('Error querying appuser:', err);
       return { error: true, message: `Error querying user: ${err.message}`, access: false };
@@ -322,13 +424,10 @@ export class MFindService {
       return { error: true, message: 'Invalid or missing roleId for user', access: false };
     }
 
-    console.log('Querying approle with roleId:', roleId, 'Type:', typeof roleId); // Debug log
+    console.log('Querying approle with roleId:', roleId, 'Type:', typeof roleId);
     let role;
     try {
-      role = await connection.collection('approle').findOne(
-        { _id: roleId },
-        // No collation for _id
-      );
+      role = await connection.collection('approle').findOne({ _id: roleId });
     } catch (err: any) {
       console.error('Error querying approle:', err);
       return { error: true, message: `Error querying role: ${err.message}`, access: false };
@@ -342,6 +441,7 @@ export class MFindService {
       error: false,
       access: hasAccess,
       roleName: role?.sectionData?.approle?.role ?? 'Unknown',
+      dbInfo: { appName, dbName }
     };
   }
 
