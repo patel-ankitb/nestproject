@@ -1,435 +1,493 @@
 import { Injectable, UnauthorizedException, BadRequestException } from '@nestjs/common';
 import * as jwt from 'jsonwebtoken';
-import mongoose from 'mongoose';
+import mongoose, { Connection } from 'mongoose';
 import { ObjectId } from 'mongodb';
-import * as fs from 'fs';
-import * as bcrypt from 'bcrypt';
+import * as bcrypt from 'bcryptjs';
 
 @Injectable()
 export class MFindService {
   private readonly JWT_SECRET: string = process.env.JWT_SECRET || 'myStaticSecretKey';
-  private AppDbMap = new Map<string, string>();
-  private readonly mapFile: string = process.env.APP_DB_MAP_FILE || 'app-db-map.json';
+  private connections: Map<string, Connection> = new Map();
 
-  constructor() {
-    this.loadAppDbMap();
-  }
+  /**
+   * Get or create a DB connection
+   */
+  private async getConnection(cn_str: string, dbName: string): Promise<Connection> {
+    const cacheKey = `${cn_str}_${dbName}`;
+    if (this.connections.has(cacheKey)) {
+      return this.connections.get(cacheKey)!;
+    }
 
-  // ---------------- DYNAMIC APP-DB MAPPING METHODS ----------------
-  private loadAppDbMap(): void {
     try {
-      if (fs.existsSync(this.mapFile)) {
-        const raw = fs.readFileSync(this.mapFile, 'utf8');
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-          Object.entries(parsed).forEach(([key, value]) => {
-            this.AppDbMap.set(key.toLowerCase(), value as string);
-          });
-        }
-      }
+      const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
+      this.connections.set(cacheKey, connection);
+      return connection;
     } catch (error) {
-      console.warn('Failed to load app-db-map.json, starting with empty map');
+      throw new BadRequestException(`Failed to establish connection: ${error.message}`);
     }
-
-    if (this.AppDbMap.size === 0) {
-      this.saveAppDbMap();
-    }
-
-    console.log('Loaded AppDbMap:', Array.from(this.AppDbMap.entries()));
   }
 
-  private saveAppDbMap(): void {
+  /**
+   * Resolve app configuration from central DB
+   */
+  private async resolveAppConfig(appName: string): Promise<{ cn_str: string; dbName: string }> {
+    const baseUri = process.env.MONGO_URI;
+    if (!baseUri) throw new Error('MONGO_URI not defined in .env');
+
+    const centralConn = await this.getConnection(baseUri, 'customize');
+
+    const AppConfigSchema = new mongoose.Schema(
+      {
+        appnm: String,
+        info: {
+          cn_str: String,
+          db: String,
+        },
+      },
+      { strict: false },
+    );
+
+    const AppConfig = centralConn.model('custom_apps', AppConfigSchema, 'custom_apps');
+
+    const config = await AppConfig.findOne({ appnm: appName }).lean();
+    if (!config?.info?.cn_str || !config?.info?.db) {
+      throw new BadRequestException(`App config not found for appName: ${appName}`);
+    }
+
+    console.log(`[resolveAppConfig] Resolved for ${appName}:`, config.info);
+    return { cn_str: config.info.cn_str, dbName: config.info.db };
+  }
+
+  /**
+   * Get the database name for a given appName
+   */
+  private async getDbName(appName: string): Promise<string> {
     try {
-      const mapObject = Object.fromEntries(this.AppDbMap);
-      fs.writeFileSync(this.mapFile, JSON.stringify(mapObject, null, 2));
-      console.log('AppDbMap saved successfully');
-    } catch (error) {
-      console.error('Failed to save AppDbMap:', error);
+      const { dbName } = await this.resolveAppConfig(appName);
+      return dbName;
+    } catch (error: any) {
+      throw new BadRequestException(`Failed to get database name for appName: ${appName}. Error: ${error.message}`);
     }
   }
 
-  public addAppDbMapping(appName: string, dbName: string): boolean {
-    if (!appName || !dbName) {
-      throw new BadRequestException('appName and dbName are required');
+  /**
+   * Get dynamic tenant DB connection
+   */
+  private async getDynamicDb(appName: string): Promise<{ db: any; cn_str: string; dbName: string }> {
+    const { cn_str, dbName } = await this.resolveAppConfig(appName);
+    const conn = await this.getConnection(cn_str, dbName);
+    return { db: conn.db, cn_str, dbName };
+  }
+
+  /**
+   * Register a new user
+   */
+  async registerUser(appName: string, name: string, password: string, roleId: string, companyId?: string) {
+    if (!name || !password || !roleId) {
+      throw new BadRequestException('Name, password, and roleId are required');
     }
-    this.AppDbMap.set(appName.toLowerCase(), dbName);
-    this.saveAppDbMap();
-    console.log(`Added mapping: ${appName} -> ${dbName}`);
-    return true;
+
+    const { db } = await this.getDynamicDb(appName);
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    const newUser = {
+      _id: new ObjectId(),
+      sectionData: {
+        appuser: {
+          name,
+          password: hashedPassword,
+          role: roleId,
+          companyId: companyId || null,
+        },
+      },
+      createdAt: new Date(),
+    };
+
+    const result = await db.collection('appuser').insertOne(newUser);
+
+    console.log(`[registerUser] New user inserted in ${appName}:`, result.insertedId);
+
+    return {
+      message: 'User registered successfully',
+      userId: result.insertedId.toString(),
+    };
   }
 
-  public removeAppDbMapping(appName: string): boolean {
-    if (!appName) throw new BadRequestException('appName is required');
-    const removed = this.AppDbMap.delete(appName.toLowerCase());
-    if (removed) {
-      this.saveAppDbMap();
-      console.log(`Removed mapping for: ${appName}`);
-    }
-    return removed;
-  }
-
-  public getAllAppDbMappings(): Array<{ appName: string; dbName: string }> {
-    return Array.from(this.AppDbMap.entries()).map(([appName, dbName]) => ({
-      appName,
-      dbName,
-    }));
-  }
-
-  public updateAppDbMapping(appName: string, newDbName: string): boolean {
-    if (!appName || !newDbName) {
-      throw new BadRequestException('appName and newDbName are required');
-    }
-    const key = appName.toLowerCase();
-    if (this.AppDbMap.has(key)) {
-      this.AppDbMap.set(key, newDbName);
-      this.saveAppDbMap();
-      console.log(`Updated mapping: ${appName} -> ${newDbName}`);
-      return true;
-    }
-    return false;
-  }
-
-  public hasAppDbMapping(appName: string): boolean {
-    return this.AppDbMap.has(appName.toLowerCase());
-  }
-
-  private getDbName(appName: string): string {
-    if (!appName) throw new BadRequestException('appName is required');
-    const dbName = this.AppDbMap.get(appName.toLowerCase());
-    if (!dbName) {
-      const autoDbName = `db_${appName.toLowerCase()}`;
-      console.warn(
-        `App config not found for appName: ${appName}, creating auto-mapping to: ${autoDbName}`,
-      );
-      this.addAppDbMapping(appName, autoDbName);
-      return autoDbName;
-    }
-    return dbName;
-  }
-
-  // ---------------- LOGIN WITH HASHED PASSWORD ----------------
+  /**
+   * Handle user login and generate JWT token
+   */
   async login(body: { appName: string; name: string; password: string }) {
     const { appName, name, password } = body;
-    if (!name || !password) throw new BadRequestException('name and password are required');
+    console.log(`[login] Attempting login for ${name} in app ${appName}`);
 
-    const dbName = this.getDbName(appName);
-    const connection = mongoose.connection.useDb(dbName);
-
-    console.log('Dynamic login - Querying with:', { appName, dbName, name });
-
-    try {
-      // 🔹 Find user by name
-      const appUser = await connection.collection('appuser').findOne({
-        'sectionData.appuser.name': name,
-      });
-
-      if (!appUser) throw new UnauthorizedException('Invalid name or password');
-
-      const hashedPassword = appUser?.sectionData?.appuser?.password;
-      if (!hashedPassword) throw new BadRequestException('User password not configured');
-
-      // 🔹 Compare hash
-      const isMatch = await bcrypt.compare(password, hashedPassword);
-      if (!isMatch) throw new UnauthorizedException('Invalid name or password');
-
-      const roleId = appUser?.sectionData?.appuser?.role;
-      if (!roleId) throw new BadRequestException('User role not configured');
-      if (!appUser._id) throw new BadRequestException('User _id is missing or invalid');
-
-      const payload = {
-        userId: appUser._id.toString(),
-        roleId: roleId.toString(),
-        name: appUser.sectionData?.appuser?.name ?? name,
-        companyId: appUser.sectionData?.appuser?.companyId,
-        appName: appName,
-        dbName: dbName,
-      };
-
-      const token = jwt.sign(payload, this.JWT_SECRET, { expiresIn: '1h' });
-
-      return {
-        message: 'Login successful',
-        access_token: token,
-        user: payload,
-        mappingInfo: {
-          appName,
-          dbName,
-          isAutoCreated: !this.AppDbMap.has(appName.toLowerCase()),
-        },
-      };
-    } catch (error) {
-      console.error('Login error:', error);
-      throw error;
+    if (!appName || !name || !password) {
+      throw new BadRequestException('appName, name, and password are required');
     }
+
+    const { db } = await this.getDynamicDb(appName);
+
+    const userDoc = await db.collection('appuser').findOne({
+      $or: [
+        { 'sectionData.appuser.name': name },
+        { 'sectionData.data.name': name },
+      ],
+    });
+
+    if (!userDoc) throw new UnauthorizedException('Invalid name or password');
+
+    let appUserData: any;
+    if (userDoc.sectionData?.appuser) {
+      appUserData = userDoc.sectionData.appuser;
+    } else if (Array.isArray(userDoc.sectionData)) {
+      const appUserSection = userDoc.sectionData.find((s: any) => s.sectionName === 'appuser');
+      appUserData = appUserSection?.data;
+    }
+
+    if (!appUserData) throw new BadRequestException('User data not found');
+
+    let matchedUser: any = null;
+    if (Array.isArray(appUserData)) {
+      matchedUser = appUserData.find((u: any) => u.name === name);
+    } else if (appUserData.name === name) {
+      matchedUser = appUserData;
+    }
+
+    if (!matchedUser) throw new UnauthorizedException('Invalid name or password');
+
+    const isMatch = await bcrypt.compare(password, matchedUser.password);
+    if (!isMatch) throw new UnauthorizedException('Invalid name or password');
+
+    if (!ObjectId.isValid(userDoc._id)) {
+      throw new BadRequestException(`Invalid userId format in database: ${userDoc._id}`);
+    }
+
+    const payload = {
+      userId: userDoc._id.toString(),
+      roleId: matchedUser.role?.toString() || '',
+      name: matchedUser.name,
+      companyId: matchedUser.companyId,
+      appName,
+    };
+
+    const token = jwt.sign(payload, this.JWT_SECRET, { expiresIn: '2h' });
+
+    return {
+      message: 'Login successful',
+      access_token: token,
+      user: payload,
+    };
   }
 
-  // ---------------- VERIFY TOKEN ----------------
-  verifyToken(authHeader: string | undefined) {
-    if (!authHeader) throw new UnauthorizedException('Authorization header is missing');
-    if (!authHeader.toLowerCase().startsWith('bearer '))
-      throw new UnauthorizedException('Authorization header must start with "Bearer "');
-    const token = authHeader.slice(7).trim();
-    if (!token) throw new UnauthorizedException('Token is missing');
-
+  /**
+   * Verify JWT token safely
+   */
+  private verifyToken(token: string) {
     try {
+      if (token.startsWith('Bearer ')) {
+        token = token.split(' ')[1];
+      }
       const decoded = jwt.verify(token, this.JWT_SECRET);
-      if (!decoded || typeof decoded !== 'object' || !decoded['userId'] || !decoded['roleId']) {
-        throw new UnauthorizedException('Invalid token payload: userId or roleId missing');
-      }
-      if (typeof decoded['userId'] !== 'string' || decoded['userId'].trim() === '') {
-        throw new UnauthorizedException('Invalid token payload: userId must be a non-empty string');
-      }
-      if (typeof decoded['roleId'] !== 'string' || decoded['roleId'].trim() === '') {
-        throw new UnauthorizedException('Invalid token payload: roleId must be a non-empty string');
-      }
-
-      if (decoded['appName'] && decoded['dbName']) {
-        const currentDbName = this.AppDbMap.get(decoded['appName'].toLowerCase());
-        if (currentDbName && currentDbName !== decoded['dbName']) {
-          console.warn(
-            `Token has outdated dbName. Token: ${decoded['dbName']}, Current: ${currentDbName}`,
-          );
-          decoded['dbName'] = currentDbName;
-        }
-      }
-
-      console.log('Decoded dynamic token:', decoded);
+      console.log('[verifyToken] Decoded token:', decoded);
       return decoded;
-    } catch (error) {
+    } catch (err: any) {
+      console.error('[verifyToken] JWT error:', err.message);
       throw new UnauthorizedException('Invalid or expired token');
     }
   }
 
-  private deepConvertToObjectId(obj: any): any {
-    if (Array.isArray(obj)) return obj.map((item) => this.deepConvertToObjectId(item));
-    if (obj && typeof obj === 'object') {
-      const newObj: any = {};
-      for (const key of Object.keys(obj)) {
-        const value = obj[key];
-        if (
-          (key.toLowerCase() === '_id' || key.toLowerCase().endsWith('id')) &&
-          typeof value === 'string' &&
-          ObjectId.isValid(value)
-        ) {
-          newObj[key] = new ObjectId(value);
-        } else {
-          newObj[key] = this.deepConvertToObjectId(value);
-        }
-      }
-      return newObj;
+  /**
+   * Convert a value to MongoDB ObjectId (safe)
+   */
+  /**
+ * Convert a value to MongoDB ObjectId (safe) - handles both string ObjectIds and numeric timestamps
+ */
+private convertToId(id: any): ObjectId {
+  try {
+    if (!id) throw new Error('Invalid id');
+    if (id instanceof ObjectId) return id;
+    
+    // Handle string ObjectIds (24-character hex)
+    if (typeof id === 'string' && /^[a-fA-F0-9]{24}$/.test(id)) {
+      return new ObjectId(id);
     }
-    return obj;
+    
+    // Handle numeric timestamps - convert to string and create ObjectId from timestamp
+    if (typeof id === 'number' || (typeof id === 'string' && /^\d+$/.test(id))) {
+      const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
+      // Create ObjectId from timestamp (first 4 bytes represent timestamp)
+      const timestamp = Math.floor(numericId / 1000); // Convert milliseconds to seconds
+      return new ObjectId(timestamp.toString(16).padStart(8, '0') + '0000000000000000');
+    }
+    
+    throw new Error(`Invalid ObjectId format: ${id}`);
+  } catch (err: any) {
+    throw new BadRequestException(`Invalid ObjectId: ${id}`);
+  }
+}
+
+ 
+  private deepConvertToObjectId(value: any): any {
+    if (Array.isArray(value)) {
+      return value.map((v) => this.deepConvertToObjectId(v));
+    }
+    if (value && typeof value === 'object') {
+      const out: any = {};
+      for (const [k, v] of Object.entries(value)) {
+        if (
+          (typeof v === 'string' && /^[a-fA-F0-9]{24}$/.test(v)) ||
+          k === '_id' ||
+          k.endsWith('Id')
+        ) {
+          try {
+            out[k] = new ObjectId(v as string);
+            continue;
+          } catch {
+            // fallthrough to assign raw value
+          }
+        }
+        out[k] = this.deepConvertToObjectId(v);
+      }
+      return out;
+    }
+    if (typeof value === 'string' && /^[a-fA-F0-9]{24}$/.test(value)) {
+      try {
+        return new ObjectId(value);
+      } catch {
+        return value;
+      }
+    }
+    return value;
   }
 
-  // ---------------- RUN AGGREGATION ----------------
-  async runAggregation(body: any, token: string, req: any) {
-    let decoded: any;
+  /**
+   * Check if collection exists in database
+   */
+  private async collectionExists(connection: mongoose.Connection, collectionName: string): Promise<boolean> {
     try {
-      decoded = this.verifyToken(token);
-      console.log('Decoded token for aggregation:', decoded);
-    } catch (err: any) {
-      return {
-        error: true,
-        message: err.message || 'Invalid or expired authorization token',
-        data: [],
-      };
+      const collections = await connection.db?.listCollections().toArray();
+      return collections?.some(c => c.name.toLowerCase() === collectionName.toLowerCase()) ?? false;
+    } catch (error) {
+      console.error(`[collectionExists] Error checking collection ${collectionName}:`, error);
+      return false;
     }
+  }
 
-    const {
-      appName,
-      moduleName,
-      query = {},
-      projection = {},
-      limit = 10,
-      skip = 0,
-      order = 'ascending',
-      sortBy = '_id',
-      lookups = [],
-      companyId,
-    } = body;
+  /**
+   * Run aggregation query with token authentication
+   */
+  /**
+ * Run aggregation query with token authentication - FIXED USER LOOKUP
+ */
+async runAggregation(body: any, token: string, req: any) {
+  let decoded: any;
+  try {
+    decoded = this.verifyToken(token);
+    console.log('Decoded token for aggregation:', decoded);
+  } catch (err: any) {
+    return {
+      error: true,
+      message: err.message || 'Invalid or expired authorization token',
+      data: [],
+    };
+  }
 
-    if (!appName || !moduleName) throw new BadRequestException('appName and moduleName are required');
+  const {
+    appName,
+    moduleName,
+    query = {},
+    projection = {},
+    limit = 10,
+    skip = 0,
+    order = 'ascending',
+    sortBy = '_id',
+    lookups = [],
+    companyId,
+  } = body;
 
-    try {
-      const dbName = this.getDbName(appName);
-      const connection = mongoose.connection.useDb(dbName);
+  if (!appName || !moduleName) {
+    return {
+      error: true,
+      message: 'appName and moduleName are required',
+      data: []
+    };
+  }
 
-      console.log(`Using dynamic DB: ${appName} -> ${dbName}`);
+  try {
+    const { cn_str, dbName } = await this.resolveAppConfig(appName);
+    const connection = await this.getConnection(cn_str, dbName);
 
-      const collections = (await connection.db?.listCollections().toArray()) ?? [];
-      const collectionInfo = collections.find(
-        (c) => c.name.toLowerCase() === moduleName.toLowerCase(),
-      );
+    console.log(`Using dynamic DB: ${appName} -> ${dbName}`);
+    console.log(`Looking for user with ID: ${decoded.userId} (type: ${typeof decoded.userId})`);
 
-      if (!collectionInfo && moduleName.toLowerCase() !== 'modules')
-        return { error: true, message: `Collection ${moduleName} not found in ${dbName}`, data: [] };
-
-      const collection = connection.collection(collectionInfo?.name || moduleName);
-
-      const userId = decoded.userId;
-      const roleId = decoded.roleId;
-
-      let user;
-      try {
-        user = await connection.collection('appuser').findOne({ _id: this.convertToId(userId) });
-      } catch (err: any) {
-        return { error: true, message: `Error querying user: ${err.message}`, data: [] };
-      }
-      if (!user) return { error: true, message: 'User not found', data: [] };
-
-      let role;
-      try {
-        role = await connection.collection('approle').findOne({ _id: this.convertToId(roleId) });
-      } catch (err: any) {
-        return { error: true, message: `Error querying role: ${err.message}`, data: [] };
-      }
-      if (!role) return { error: true, message: 'Role not found', data: [] };
-
-      const isSuperAdmin = role?.sectionData?.approle?.role?.toLowerCase() === 'superadmin';
-      const assignedModules =
-        role?.sectionData?.approle?.modules?.map((m) => m.module.toLowerCase()) || [];
-      const requestedModule = moduleName.toLowerCase();
-
-      if (!isSuperAdmin && !assignedModules.includes(requestedModule)) {
-        return { error: true, message: `Access denied for module: ${moduleName}`, data: [] };
-      }
-
-      let reqQuery: any = this.deepConvertToObjectId(query);
-      if (
-        collections.some((c) => c.name === 'company') &&
-        !isSuperAdmin &&
-        moduleName !== 'company' &&
-        role?.sectionData?.approle?.issaasrole !== true
-      ) {
-        if (!companyId)
-          return { error: true, message: 'companyId is required for this operation', data: [] };
-        const assignedFields =
-          role?.sectionData?.approle?.modules?.find(
-            (mdl) => mdl.module.toLowerCase() === moduleName.toLowerCase(),
-          )?.assignedField || [];
-        if (assignedFields.length > 0) {
-          const userFilter = {
-            $or: assignedFields.map((field) => ({
-              $or: [{ companyId }, { [field]: userId }],
-            })),
-          };
-          reqQuery = { ...reqQuery, ...userFilter };
-        }
-      }
-
-      const pipeline: any[] = [];
-      if (Object.keys(reqQuery).length) pipeline.push({ $match: reqQuery });
-      for (const lookup of lookups) pipeline.push(this.deepConvertToObjectId(lookup));
-      if (Object.keys(projection).length) pipeline.push({ $project: projection });
-      pipeline.push({ $sort: { [sortBy]: order === 'descending' ? -1 : 1 } });
-      if (skip > 0) pipeline.push({ $skip: skip });
-      if (limit > 0) pipeline.push({ $limit: limit });
-
-      const documents = await collection.aggregate(pipeline).toArray();
+    // Check if collection exists
+    const collectionExists = await this.collectionExists(connection, moduleName);
+    if (!collectionExists && moduleName.toLowerCase() !== 'modules') {
       return {
         error: false,
-        message: 'Data retrieved successfully',
-        count: documents.length,
-        data: documents,
-        dbInfo: { appName, dbName },
+        message: `No data: collection ${moduleName} not found in database ${dbName}`,
+        data: []
       };
-    } catch (err: any) {
-      return { error: true, message: err.message || 'Internal server error', data: [] };
     }
-  }
 
-  // ---------------- GET ROLE BY ID ----------------
-  async getRoleById(appName: string, roleId: string) {
-    if (!appName || !roleId) throw new BadRequestException('appName and roleId are required');
-    const dbName = this.getDbName(appName);
-    const connection = mongoose.connection.useDb(dbName);
+    const collection = connection.collection(moduleName);
 
-    let role;
+    const userId = decoded.userId;
+    const roleId = decoded.roleId;
+
+    // FLEXIBLE USER LOOKUP - handles multiple ID formats
+    let user: any = null;
     try {
-      role = await connection.collection('approle').findOne({ _id: this.convertToId(roleId) });
-    } catch (err: any) {
-      return { error: true, message: `Error querying role: ${err.message}`, data: null };
-    }
-    if (!role) return { error: true, message: 'Role not found', data: null };
+      // Try multiple approaches to find the user
+      const userCollection = connection.collection('appuser');
+      
+      // Approach 1: Try as ObjectId
+      try {
+        if (typeof userId === 'string' && /^[a-fA-F0-9]{24}$/.test(userId)) {
+          user = await userCollection.findOne({ _id: new ObjectId(userId) });
+          if (user) console.log('User found via ObjectId lookup');
+        }
+      } catch (e) {}
+      
+      // Approach 2: Try as direct value (numeric or string)
+      if (!user) {
+        user = await userCollection.findOne({ _id: userId });
+        if (user) console.log('User found via direct ID lookup');
+      }
+      
+      // Approach 3: Try searching in sectionData (common in your schema)
+      if (!user) {
+        user = await userCollection.findOne({
+          $or: [
+            { 'sectionData.appuser._id': userId },
+            { 'sectionData.appuser.id': userId },
+            { 'sectionData.data._id': userId },
+            { 'sectionData.data.id': userId }
+          ]
+        });
+        if (user) console.log('User found via sectionData lookup');
+      }
+      
+      // Approach 4: Try by name (fallback)
+      if (!user && decoded.name) {
+        user = await userCollection.findOne({
+          $or: [
+            { 'sectionData.appuser.name': decoded.name },
+            { 'sectionData.data.name': decoded.name }
+          ]
+        });
+        if (user) console.log('User found via name lookup');
+      }
 
+    } catch (err: any) {
+      console.error('User lookup error:', err);
+      return { error: true, message: `Error querying user: ${err.message}`, data: [] };
+    }
+
+    if (!user) {
+      console.error('User not found with any lookup method. Available fields in token:', decoded);
+      return { error: true, message: 'User not found. Please login again.', data: [] };
+    }
+
+    console.log('User found:', { userId: user._id, name: user.sectionData?.appuser?.name });
+
+    // FLEXIBLE ROLE LOOKUP
+    let role : any= null;
+    try {
+      const roleCollection = connection.collection('approle');
+      
+      // Try multiple approaches for role lookup
+      try {
+        if (typeof roleId === 'string' && /^[a-fA-F0-9]{24}$/.test(roleId)) {
+          role = await roleCollection.findOne({ _id: new ObjectId(roleId) });
+        }
+      } catch (e) {}
+      
+      if (!role) {
+        role = await roleCollection.findOne({ _id: roleId });
+      }
+      
+      // Try finding role by name if ID lookup fails
+      if (!role && decoded.roleId) {
+        role = await roleCollection.findOne({
+          $or: [
+            { 'sectionData.approle.role': decoded.roleId },
+            { 'sectionData.approle.name': decoded.roleId }
+          ]
+        });
+      }
+
+    } catch (err: any) {
+      console.error('Role lookup error:', err);
+      return { error: true, message: `Error querying role: ${err.message}`, data: [] };
+    }
+
+    if (!role) {
+      console.error('Role not found. Role ID from token:', roleId);
+      return { error: true, message: 'Role not found. Please contact administrator.', data: [] };
+    }
+
+    // Extract role information with flexible access
+    const roleData = role.sectionData?.approle || role.sectionData?.data || role;
+    const isSuperAdmin = roleData?.role?.toLowerCase() === 'superadmin';
+    const assignedModules = roleData?.modules?.map((m: any) => 
+      (m.module || m.moduleName || m).toString().toLowerCase()
+    ) || [];
+
+    const requestedModule = moduleName.toLowerCase();
+
+    if (!isSuperAdmin && !assignedModules.includes(requestedModule)) {
+      return { error: true, message: `Access denied for module: ${moduleName}`, data: [] };
+    }
+
+    // Build query with company filtering if needed
+    let reqQuery: any = this.deepConvertToObjectId(query);
+    
+    const companyCollectionExists = await this.collectionExists(connection, 'company');
+    if (companyCollectionExists && !isSuperAdmin && moduleName !== 'company' && roleData?.issaasrole !== true) {
+      if (!companyId) {
+        return { error: true, message: 'companyId is required for this operation', data: [] };
+      }
+      
+      const moduleConfig = roleData?.modules?.find(
+        (mdl: any) => (mdl.module || mdl.moduleName || '').toString().toLowerCase() === requestedModule
+      );
+      
+      const assignedFields = moduleConfig?.assignedField || [];
+      if (assignedFields.length > 0) {
+        const userFilter = {
+          $or: assignedFields.map((field: string) => ({
+            $or: [{ companyId }, { [field]: userId }],
+          })),
+        };
+        reqQuery = { ...reqQuery, ...userFilter };
+      }
+    }
+
+    // Build aggregation pipeline
+    const pipeline: any[] = [];
+    if (Object.keys(reqQuery).length) pipeline.push({ $match: reqQuery });
+    for (const lookup of lookups) pipeline.push(this.deepConvertToObjectId(lookup));
+    if (Object.keys(projection).length) pipeline.push({ $project: projection });
+    pipeline.push({ $sort: { [sortBy]: order === 'descending' ? -1 : 1 } });
+    if (skip > 0) pipeline.push({ $skip: skip });
+    if (limit > 0) pipeline.push({ $limit: limit });
+
+    console.log('Running aggregation pipeline:', JSON.stringify(pipeline, null, 2));
+
+    const documents = await collection.aggregate(pipeline).toArray();
+    
     return {
       error: false,
-      message: 'Role retrieved successfully',
-      data: {
-        roleId: role._id,
-        roleName: role?.sectionData?.approle?.role ?? 'Unknown',
-        modules: role?.sectionData?.approle?.modules || [],
-      },
+      message: 'Data retrieved successfully',
+      count: documents.length,
+      data: documents,
       dbInfo: { appName, dbName },
     };
+    
+  } catch (err: any) {
+    console.error('[runAggregation] Error:', err);
+    return { error: true, message: err.message || 'Internal server error', data: [] };
   }
-
-  // ---------------- GET MODULE COUNT PER ROLE ----------------
-  async getRoleModulesCount(appName: string) {
-    if (!appName) throw new BadRequestException('appName is required');
-    const dbName = this.getDbName(appName);
-    const connection = mongoose.connection.useDb(dbName);
-
-    const roles = await connection
-      .collection('approle')
-      .find({}, { collation: { locale: 'en', strength: 2 } })
-      .toArray();
-    const result = roles.map((role) => ({
-      roleId: role._id,
-      roleName: role?.sectionData?.approle?.role || 'Unknown',
-      moduleCount: role?.sectionData?.approle?.modules?.length || 0,
-      modules: role?.sectionData?.approle?.modules?.map((m) => m.module) || [],
-    }));
-
-    return {
-      error: false,
-      message: 'Module count per role retrieved successfully',
-      data: result,
-      dbInfo: { appName, dbName },
-    };
-  }
-
-  // ---------------- CHECK USER ACCESS ----------------
-  async checkUserAccess(userId: string, moduleName: string, appName: string) {
-    if (!userId || !moduleName || !appName) {
-      throw new BadRequestException('userId, moduleName, and appName are required');
-    }
-    const dbName = this.getDbName(appName);
-    const connection = mongoose.connection.useDb(dbName);
-
-    let user;
-    try {
-      user = await connection.collection('appuser').findOne({ _id: this.convertToId(userId) });
-    } catch (err: any) {
-      return { error: true, message: `Error querying user: ${err.message}`, access: false };
-    }
-    if (!user) return { error: true, message: 'User not found', access: false };
-
-    const roleId = user?.sectionData?.appuser?.role;
-    if (!roleId) {
-      return { error: true, message: 'Invalid or missing roleId for user', access: false };
-    }
-
-    let role;
-    try {
-      role = await connection.collection('approle').findOne({ _id: roleId });
-    } catch (err: any) {
-      return { error: true, message: `Error querying role: ${err.message}`, access: false };
-    }
-    if (!role) return { error: true, message: 'Role not found', access: false };
-
-    const modules = role?.sectionData?.approle?.modules?.map((m) => m.module.toLowerCase()) || [];
-    const hasAccess = modules.includes(moduleName.toLowerCase());
-
-    return {
-      error: false,
-      access: hasAccess,
-      roleName: role?.sectionData?.approle?.role ?? 'Unknown',
-      dbInfo: { appName, dbName },
-    };
-  }
-
-  private convertToId(id: string): any {
-    return mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id;
-  }
+}
 }
