@@ -117,6 +117,9 @@ export class MFindService {
   /**
    * Handle user login and generate JWT token
    */
+  /**
+  * Handle user login and generate JWT token - FIXED for numeric IDs
+  */
   async login(body: { appName: string; name: string; password: string }) {
     const { appName, name, password } = body;
     console.log(`[login] Attempting login for ${name} in app ${appName}`);
@@ -158,12 +161,12 @@ export class MFindService {
     const isMatch = await bcrypt.compare(password, matchedUser.password);
     if (!isMatch) throw new UnauthorizedException('Invalid name or password');
 
-    if (!ObjectId.isValid(userDoc._id)) {
-      throw new BadRequestException(`Invalid userId format in database: ${userDoc._id}`);
-    }
+    // FIX: Accept numeric IDs instead of forcing ObjectId validation
+    const userId = userDoc._id;
+    console.log(`User ID format: ${userId} (type: ${typeof userId})`);
 
     const payload = {
-      userId: userDoc._id.toString(),
+      userId: userId.toString(), // Convert to string for consistency
       roleId: matchedUser.role?.toString() || '',
       name: matchedUser.name,
       companyId: matchedUser.companyId,
@@ -202,31 +205,66 @@ export class MFindService {
   /**
  * Convert a value to MongoDB ObjectId (safe) - handles both string ObjectIds and numeric timestamps
  */
-private convertToId(id: any): ObjectId {
-  try {
-    if (!id) throw new Error('Invalid id');
-    if (id instanceof ObjectId) return id;
-    
-    // Handle string ObjectIds (24-character hex)
-    if (typeof id === 'string' && /^[a-fA-F0-9]{24}$/.test(id)) {
-      return new ObjectId(id);
-    }
-    
-    // Handle numeric timestamps - convert to string and create ObjectId from timestamp
-    if (typeof id === 'number' || (typeof id === 'string' && /^\d+$/.test(id))) {
-      const numericId = typeof id === 'string' ? parseInt(id, 10) : id;
-      // Create ObjectId from timestamp (first 4 bytes represent timestamp)
-      const timestamp = Math.floor(numericId / 1000); // Convert milliseconds to seconds
-      return new ObjectId(timestamp.toString(16).padStart(8, '0') + '0000000000000000');
-    }
-    
-    throw new Error(`Invalid ObjectId format: ${id}`);
-  } catch (err: any) {
-    throw new BadRequestException(`Invalid ObjectId: ${id}`);
-  }
-}
+  /**
+   * Convert a value to MongoDB ObjectId (safe) - handles numeric IDs gracefully
+   */
+  private convertToId(id: any): any {
+    try {
+      if (!id) throw new Error('Invalid id');
 
- 
+      // If it's already an ObjectId, return it
+      if (id instanceof ObjectId) return id;
+
+      // If it's a valid 24-character hex string, convert to ObjectId
+      if (typeof id === 'string' && /^[a-fA-F0-9]{24}$/.test(id)) {
+        return new ObjectId(id);
+      }
+
+      // If it's numeric (timestamp), return as-is since your DB uses numeric IDs
+      if (typeof id === 'number' || (typeof id === 'string' && /^\d+$/.test(id))) {
+        return id; // Return numeric ID as-is
+      }
+
+      throw new Error(`Invalid ID format: ${id}`);
+    } catch (err: any) {
+      // Instead of throwing, return the original ID for flexible querying
+      console.warn(`Could not convert ID ${id} to ObjectId, using as-is:`, err.message);
+      return id;
+    }
+  }
+
+  /**
+   * Flexible converter that tries to convert to ObjectId but falls back to numeric or raw id when conversion is not possible.
+   */
+  private flexibleConvertToId(id: any): any {
+    try {
+      // Prefer using the stronger convertToId if possible
+      return this.convertToId(id);
+    } catch {
+      // If convertToId fails, try sensible fallbacks:
+      // - If it's already a number, return as-is
+      if (typeof id === 'number') return id;
+
+      // - If it's a 24-char hex string but convertToId failed for some reason, try constructing ObjectId directly
+      if (typeof id === 'string' && /^[a-fA-F0-9]{24}$/.test(id)) {
+        try {
+          return new ObjectId(id);
+        } catch {
+          // ignore and fallthrough
+        }
+      }
+
+      // - If it's a numeric string, return as an integer (for systems that use numeric IDs)
+      if (typeof id === 'string' && /^\d+$/.test(id)) {
+        return parseInt(id, 10);
+      }
+
+      // - Otherwise return the original id so the caller can attempt other queries
+      return id;
+    }
+  }
+
+
   private deepConvertToObjectId(value: any): any {
     if (Array.isArray(value)) {
       return value.map((v) => this.deepConvertToObjectId(v));
@@ -276,218 +314,206 @@ private convertToId(id: any): ObjectId {
   /**
    * Run aggregation query with token authentication
    */
-  /**
- * Run aggregation query with token authentication - FIXED USER LOOKUP
- */
-async runAggregation(body: any, token: string, req: any) {
-  let decoded: any;
-  try {
-    decoded = this.verifyToken(token);
-    console.log('Decoded token for aggregation:', decoded);
-  } catch (err: any) {
-    return {
-      error: true,
-      message: err.message || 'Invalid or expired authorization token',
-      data: [],
-    };
-  }
-
-  const {
-    appName,
-    moduleName,
-    query = {},
-    projection = {},
-    limit = 10,
-    skip = 0,
-    order = 'ascending',
-    sortBy = '_id',
-    lookups = [],
-    companyId,
-  } = body;
-
-  if (!appName || !moduleName) {
-    return {
-      error: true,
-      message: 'appName and moduleName are required',
-      data: []
-    };
-  }
-
-  try {
-    const { cn_str, dbName } = await this.resolveAppConfig(appName);
-    const connection = await this.getConnection(cn_str, dbName);
-
-    console.log(`Using dynamic DB: ${appName} -> ${dbName}`);
-    console.log(`Looking for user with ID: ${decoded.userId} (type: ${typeof decoded.userId})`);
-
-    // Check if collection exists
-    const collectionExists = await this.collectionExists(connection, moduleName);
-    if (!collectionExists && moduleName.toLowerCase() !== 'modules') {
+  async runAggregation(body: any, token: string, req: any) {
+    let decoded: any;
+    try {
+      decoded = this.verifyToken(token);
+      console.log('Decoded token for aggregation:', decoded);
+    } catch (err: any) {
       return {
-        error: false,
-        message: `No data: collection ${moduleName} not found in database ${dbName}`,
+        error: true,
+        message: err.message || 'Invalid or expired authorization token',
+        data: [],
+      };
+    }
+
+    const {
+      appName,
+      moduleName,
+      query = {},
+      projection = {},
+      limit = 10,
+      skip = 0,
+      order = 'ascending',
+      sortBy = '_id',
+      lookups = [],
+      companyId,
+    } = body;
+
+    if (!appName || !moduleName) {
+      return {
+        error: true,
+        message: 'appName and moduleName are required',
         data: []
       };
     }
 
-    const collection = connection.collection(moduleName);
-
-    const userId = decoded.userId;
-    const roleId = decoded.roleId;
-
-    // FLEXIBLE USER LOOKUP - handles multiple ID formats
-    let user: any = null;
     try {
-      // Try multiple approaches to find the user
-      const userCollection = connection.collection('appuser');
-      
-      // Approach 1: Try as ObjectId
-      try {
-        if (typeof userId === 'string' && /^[a-fA-F0-9]{24}$/.test(userId)) {
-          user = await userCollection.findOne({ _id: new ObjectId(userId) });
-          if (user) console.log('User found via ObjectId lookup');
-        }
-      } catch (e) {}
-      
-      // Approach 2: Try as direct value (numeric or string)
-      if (!user) {
-        user = await userCollection.findOne({ _id: userId });
-        if (user) console.log('User found via direct ID lookup');
-      }
-      
-      // Approach 3: Try searching in sectionData (common in your schema)
-      if (!user) {
-        user = await userCollection.findOne({
-          $or: [
-            { 'sectionData.appuser._id': userId },
-            { 'sectionData.appuser.id': userId },
-            { 'sectionData.data._id': userId },
-            { 'sectionData.data.id': userId }
-          ]
-        });
-        if (user) console.log('User found via sectionData lookup');
-      }
-      
-      // Approach 4: Try by name (fallback)
-      if (!user && decoded.name) {
-        user = await userCollection.findOne({
-          $or: [
-            { 'sectionData.appuser.name': decoded.name },
-            { 'sectionData.data.name': decoded.name }
-          ]
-        });
-        if (user) console.log('User found via name lookup');
-      }
+      const { cn_str, dbName } = await this.resolveAppConfig(appName);
+      const connection = await this.getConnection(cn_str, dbName);
 
-    } catch (err: any) {
-      console.error('User lookup error:', err);
-      return { error: true, message: `Error querying user: ${err.message}`, data: [] };
-    }
+      console.log(`Using dynamic DB: ${appName} -> ${dbName}`);
 
-    if (!user) {
-      console.error('User not found with any lookup method. Available fields in token:', decoded);
-      return { error: true, message: 'User not found. Please login again.', data: [] };
-    }
-
-    console.log('User found:', { userId: user._id, name: user.sectionData?.appuser?.name });
-
-    // FLEXIBLE ROLE LOOKUP
-    let role : any= null;
-    try {
-      const roleCollection = connection.collection('approle');
-      
-      // Try multiple approaches for role lookup
-      try {
-        if (typeof roleId === 'string' && /^[a-fA-F0-9]{24}$/.test(roleId)) {
-          role = await roleCollection.findOne({ _id: new ObjectId(roleId) });
-        }
-      } catch (e) {}
-      
-      if (!role) {
-        role = await roleCollection.findOne({ _id: roleId });
-      }
-      
-      // Try finding role by name if ID lookup fails
-      if (!role && decoded.roleId) {
-        role = await roleCollection.findOne({
-          $or: [
-            { 'sectionData.approle.role': decoded.roleId },
-            { 'sectionData.approle.name': decoded.roleId }
-          ]
-        });
-      }
-
-    } catch (err: any) {
-      console.error('Role lookup error:', err);
-      return { error: true, message: `Error querying role: ${err.message}`, data: [] };
-    }
-
-    if (!role) {
-      console.error('Role not found. Role ID from token:', roleId);
-      return { error: true, message: 'Role not found. Please contact administrator.', data: [] };
-    }
-
-    // Extract role information with flexible access
-    const roleData = role.sectionData?.approle || role.sectionData?.data || role;
-    const isSuperAdmin = roleData?.role?.toLowerCase() === 'superadmin';
-    const assignedModules = roleData?.modules?.map((m: any) => 
-      (m.module || m.moduleName || m).toString().toLowerCase()
-    ) || [];
-
-    const requestedModule = moduleName.toLowerCase();
-
-    if (!isSuperAdmin && !assignedModules.includes(requestedModule)) {
-      return { error: true, message: `Access denied for module: ${moduleName}`, data: [] };
-    }
-
-    // Build query with company filtering if needed
-    let reqQuery: any = this.deepConvertToObjectId(query);
-    
-    const companyCollectionExists = await this.collectionExists(connection, 'company');
-    if (companyCollectionExists && !isSuperAdmin && moduleName !== 'company' && roleData?.issaasrole !== true) {
-      if (!companyId) {
-        return { error: true, message: 'companyId is required for this operation', data: [] };
-      }
-      
-      const moduleConfig = roleData?.modules?.find(
-        (mdl: any) => (mdl.module || mdl.moduleName || '').toString().toLowerCase() === requestedModule
-      );
-      
-      const assignedFields = moduleConfig?.assignedField || [];
-      if (assignedFields.length > 0) {
-        const userFilter = {
-          $or: assignedFields.map((field: string) => ({
-            $or: [{ companyId }, { [field]: userId }],
-          })),
+      // Check if collection exists
+      const collectionExists = await this.collectionExists(connection, moduleName);
+      if (!collectionExists && moduleName.toLowerCase() !== 'modules') {
+        return {
+          error: false,
+          message: `No data: collection ${moduleName} not found in database ${dbName}`,
+          data: []
         };
-        reqQuery = { ...reqQuery, ...userFilter };
       }
+
+      const collection = connection.collection(moduleName);
+
+      const userId = decoded.userId;
+      const roleId = decoded.roleId;
+
+      // In runAggregation method, replace the user lookup with:
+      let user;
+      try {
+        const userCollection = connection.collection('appuser');
+
+        // Flexible user lookup - handles both ObjectId and numeric IDs
+        user = await userCollection.findOne({
+          _id: this.convertToId(userId)
+        });
+
+        // If not found with converted ID, try direct match
+        if (!user) {
+          user = await userCollection.findOne({ _id: userId });
+        }
+
+      } catch (err: any) {
+        return { error: true, message: `Error querying user: ${err.message}`, data: [] };
+      }
+      // In runAggregation method, replace the role lookup with:
+      let role;
+      try {
+        const roleCollection = connection.collection('approle');
+
+        // Flexible role lookup
+        role = await roleCollection.findOne({
+          _id: this.convertToId(roleId)
+        });
+
+        // If not found with converted ID, try direct match
+        if (!role) {
+          role = await roleCollection.findOne({ _id: roleId });
+        }
+
+      } catch (err: any) {
+        return { error: true, message: `Error querying role: ${err.message}`, data: [] };
+      }
+
+      const isSuperAdmin = role?.sectionData?.approle?.role?.toLowerCase() === 'superadmin';
+      const assignedModules =
+        role?.sectionData?.approle?.modules?.map((m) => m.module.toLowerCase()) || [];
+      const requestedModule = moduleName.toLowerCase();
+
+      if (!isSuperAdmin && !assignedModules.includes(requestedModule)) {
+        return { error: true, message: `Access denied for module: ${moduleName}`, data: [] };
+      }
+
+      let reqQuery: any = this.deepConvertToObjectId(query);
+      if (
+        await this.collectionExists(connection, 'company') &&
+        !isSuperAdmin &&
+        moduleName !== 'company' &&
+        role?.sectionData?.approle?.issaasrole !== true
+      ) {
+        if (!companyId)
+          return { error: true, message: 'companyId is required for this operation', data: [] };
+        const assignedFields =
+          role?.sectionData?.approle?.modules?.find(
+            (mdl) => mdl.module.toLowerCase() === moduleName.toLowerCase(),
+          )?.assignedField || [];
+        if (assignedFields.length > 0) {
+          const userFilter = {
+            $or: assignedFields.map((field) => ({
+              $or: [{ companyId }, { [field]: userId }],
+            })),
+          };
+          reqQuery = { ...reqQuery, ...userFilter };
+        }
+      }
+
+      const pipeline: any[] = [];
+      if (Object.keys(reqQuery).length) pipeline.push({ $match: reqQuery });
+      for (const lookup of lookups) pipeline.push(this.deepConvertToObjectId(lookup));
+      if (Object.keys(projection).length) pipeline.push({ $project: projection });
+      pipeline.push({ $sort: { [sortBy]: order === 'descending' ? -1 : 1 } });
+      if (skip > 0) pipeline.push({ $skip: skip });
+      if (limit > 0) pipeline.push({ $limit: limit });
+
+      const documents = await collection.aggregate(pipeline).toArray();
+      return {
+        error: false,
+        message: 'Data retrieved successfully',
+        count: documents.length,
+        data: documents,
+        dbInfo: { appName, dbName },
+      };
+    } catch (err: any) {
+      console.error('[runAggregation] Error:', err);
+      return { error: true, message: err.message || 'Internal server error', data: [] };
+    }
+  }
+
+  /**
+   * Get role by ID
+   */
+  async getRoleById(appName: string, roleId: string) {
+    if (!appName || !roleId) throw new BadRequestException('appName and roleId are required');
+
+    try {
+      const { dbName } = await this.resolveAppConfig(appName);
+      const connection = await this.getConnection(process.env.MONGO_URI!, dbName);
+
+      let role;
+      try {
+        role = await connection.collection('approle').findOne({ _id: this.convertToId(roleId) });
+      } catch (err: any) {
+        return { error: true, message: `Error querying role: ${err.message}`, data: null };
+      }
+      if (!role) return { error: true, message: 'Role not found', data: null };
+
+      return {
+        error: false,
+        message: 'Role retrieved successfully',
+        data: {
+          roleId: role._id,
+          roleName: role?.sectionData?.approle?.role ?? 'Unknown',
+          modules: role?.sectionData?.approle?.modules || [],
+        },
+        dbInfo: { appName, dbName },
+      };
+    } catch (err: any) {
+      return { error: true, message: err.message || 'Failed to get role', data: null };
+    }
+  }
+
+  /**
+   * Check user access for a module
+   */
+  async checkUserAccess(appName: string, roleId: string, moduleName: string) {
+    if (!appName || !roleId || !moduleName) {
+      throw new BadRequestException('appName, roleId, and moduleName are required');
     }
 
-    // Build aggregation pipeline
-    const pipeline: any[] = [];
-    if (Object.keys(reqQuery).length) pipeline.push({ $match: reqQuery });
-    for (const lookup of lookups) pipeline.push(this.deepConvertToObjectId(lookup));
-    if (Object.keys(projection).length) pipeline.push({ $project: projection });
-    pipeline.push({ $sort: { [sortBy]: order === 'descending' ? -1 : 1 } });
-    if (skip > 0) pipeline.push({ $skip: skip });
-    if (limit > 0) pipeline.push({ $limit: limit });
+    const roleResult = await this.getRoleById(appName, roleId);
+    if (roleResult?.error) {
+      return { moduleName, roleId, hasAccess: false, message: roleResult.message || 'Role lookup failed' };
+    }
 
-    console.log('Running aggregation pipeline:', JSON.stringify(pipeline, null, 2));
+    const modules = roleResult?.data?.modules || [];
+    const hasAccess = Array.isArray(modules)
+      ? modules.some((m: any) => {
+        const modName = (m?.module || m?.moduleName || '').toString().toLowerCase();
+        return modName === moduleName.toLowerCase();
+      })
+      : false;
 
-    const documents = await collection.aggregate(pipeline).toArray();
-    
-    return {
-      error: false,
-      message: 'Data retrieved successfully',
-      count: documents.length,
-      data: documents,
-      dbInfo: { appName, dbName },
-    };
-    
-  } catch (err: any) {
-    console.error('[runAggregation] Error:', err);
-    return { error: true, message: err.message || 'Internal server error', data: [] };
+    return { moduleName, roleId, hasAccess };
   }
-}
 }
