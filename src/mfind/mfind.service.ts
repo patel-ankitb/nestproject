@@ -220,8 +220,7 @@ export class MFindService {
         const appUserSection = userDoc.sectionData.find((s: any) => s.sectionName === 'appuser');
         appUserData = appUserSection?.data;
       }
-      console.log('[login] appUserData:', appUserData);
-    } catch (error: any) {
+        } catch (error: any) {
       this.logError('login', error, body);
       throw error;
     }
