@@ -9,9 +9,8 @@ export class MFindService {
   private readonly JWT_SECRET: string = process.env.JWT_SECRET || 'myStaticSecretKey';
   private connections: Map<string, Connection> = new Map();
 
-  /**
-   * Get or create a DB connection
-   */
+//------------------------- Get or create a DB connection--------------------------------
+  
   private async getConnection(cn_str: string, dbName: string): Promise<Connection> {
     const cacheKey = `${cn_str}_${dbName}`;
     if (this.connections.has(cacheKey)) {
@@ -27,9 +26,9 @@ export class MFindService {
     }
   }
 
-  /**
-   * Resolve app configuration from central DB
-   */
+  
+//===================== Resolve app configuration from central DB============================================
+   
   private async resolveAppConfig(appName: string): Promise<{ cn_str: string; dbName: string }> {
     const baseUri = process.env.MONGO_URI;
     if (!baseUri) throw new Error('MONGO_URI not defined in .env');
@@ -58,9 +57,9 @@ export class MFindService {
     return { cn_str: config.info.cn_str, dbName: config.info.db };
   }
 
-  /**
-   * Get the database name for a given appName
-   */
+  
+ //=================================Get the database name for a given appName======================================
+   
   private async getDbName(appName: string): Promise<string> {
     try {
       const { dbName } = await this.resolveAppConfig(appName);
@@ -70,18 +69,18 @@ export class MFindService {
     }
   }
 
-  /**
-   * Get dynamic tenant DB connection
-   */
+  
+//=======================================Get dynamic tenant DB connection===========================================
+   
   private async getDynamicDb(appName: string): Promise<{ db: any; cn_str: string; dbName: string }> {
     const { cn_str, dbName } = await this.resolveAppConfig(appName);
     const conn = await this.getConnection(cn_str, dbName);
     return { db: conn.db, cn_str, dbName };
   }
 
-  /**
-   * Register a new user
-   */
+  
+//=================================Register a new user=========================================================
+   
   async registerUser(appName: string, name: string, password: string, roleId: string, companyId?: string) {
     if (!name || !password || !roleId) {
       throw new BadRequestException('Name, password, and roleId are required');
@@ -114,12 +113,7 @@ export class MFindService {
     };
   }
 
-  /**
-   * Handle user login and generate JWT token
-   */
-  /**
-  * Handle user login and generate JWT token - FIXED for numeric IDs
-  */
+//=================================User login===========================================
   async login(body: { appName: string; name: string; password: string }) {
     const { appName, name, password } = body;
     console.log(`[login] Attempting login for ${name} in app ${appName}`);
@@ -161,12 +155,12 @@ export class MFindService {
     const isMatch = await bcrypt.compare(password, matchedUser.password);
     if (!isMatch) throw new UnauthorizedException('Invalid name or password');
 
-    // FIX: Accept numeric IDs instead of forcing ObjectId validation
+    
     const userId = userDoc._id;
     console.log(`User ID format: ${userId} (type: ${typeof userId})`);
 
     const payload = {
-      userId: userId.toString(), // Convert to string for consistency
+      userId: userId.toString(), 
       roleId: matchedUser.role?.toString() || '',
       name: matchedUser.name,
       companyId: matchedUser.companyId,
@@ -182,9 +176,9 @@ export class MFindService {
     };
   }
 
-  /**
-   * Verify JWT token safely
-   */
+  
+//=========================Verify JWT token safely=====================================
+   
   private verifyToken(token: string) {
     try {
       if (token.startsWith('Bearer ')) {
@@ -199,71 +193,29 @@ export class MFindService {
     }
   }
 
-  /**
-   * Convert a value to MongoDB ObjectId (safe)
-   */
-  /**
- * Convert a value to MongoDB ObjectId (safe) - handles both string ObjectIds and numeric timestamps
- */
-  /**
-   * Convert a value to MongoDB ObjectId (safe) - handles numeric IDs gracefully
-   */
+//=========Convert to MongoDB ObjectId (safe)========================
+
   private convertToId(id: any): any {
     try {
       if (!id) throw new Error('Invalid id');
-
-      // If it's already an ObjectId, return it
       if (id instanceof ObjectId) return id;
-
-      // If it's a valid 24-character hex string, convert to ObjectId
       if (typeof id === 'string' && /^[a-fA-F0-9]{24}$/.test(id)) {
         return new ObjectId(id);
       }
-
-      // If it's numeric (timestamp), return as-is since your DB uses numeric IDs
       if (typeof id === 'number' || (typeof id === 'string' && /^\d+$/.test(id))) {
-        return id; // Return numeric ID as-is
+        return id; 
       }
 
       throw new Error(`Invalid ID format: ${id}`);
     } catch (err: any) {
-      // Instead of throwing, return the original ID for flexible querying
+      
       console.warn(`Could not convert ID ${id} to ObjectId, using as-is:`, err.message);
       return id;
     }
   }
 
-  /**
-   * Flexible converter that tries to convert to ObjectId but falls back to numeric or raw id when conversion is not possible.
-   */
-  private flexibleConvertToId(id: any): any {
-    try {
-      // Prefer using the stronger convertToId if possible
-      return this.convertToId(id);
-    } catch {
-      // If convertToId fails, try sensible fallbacks:
-      // - If it's already a number, return as-is
-      if (typeof id === 'number') return id;
 
-      // - If it's a 24-char hex string but convertToId failed for some reason, try constructing ObjectId directly
-      if (typeof id === 'string' && /^[a-fA-F0-9]{24}$/.test(id)) {
-        try {
-          return new ObjectId(id);
-        } catch {
-          // ignore and fallthrough
-        }
-      }
-
-      // - If it's a numeric string, return as an integer (for systems that use numeric IDs)
-      if (typeof id === 'string' && /^\d+$/.test(id)) {
-        return parseInt(id, 10);
-      }
-
-      // - Otherwise return the original id so the caller can attempt other queries
-      return id;
-    }
-  }
-
+ 
 
   private deepConvertToObjectId(value: any): any {
     if (Array.isArray(value)) {
@@ -281,7 +233,7 @@ export class MFindService {
             out[k] = new ObjectId(v as string);
             continue;
           } catch {
-            // fallthrough to assign raw value
+            
           }
         }
         out[k] = this.deepConvertToObjectId(v);
@@ -298,9 +250,7 @@ export class MFindService {
     return value;
   }
 
-  /**
-   * Check if collection exists in database
-   */
+ 
   private async collectionExists(connection: mongoose.Connection, collectionName: string): Promise<boolean> {
     try {
       const collections = await connection.db?.listCollections().toArray();
@@ -311,9 +261,6 @@ export class MFindService {
     }
   }
 
-  /**
-   * Run aggregation query with token authentication
-   */
   async runAggregation(body: any, token: string, req: any) {
     let decoded: any;
     try {
@@ -369,17 +316,14 @@ export class MFindService {
       const userId = decoded.userId;
       const roleId = decoded.roleId;
 
-      // In runAggregation method, replace the user lookup with:
       let user;
       try {
         const userCollection = connection.collection('appuser');
 
-        // Flexible user lookup - handles both ObjectId and numeric IDs
         user = await userCollection.findOne({
           _id: this.convertToId(userId)
         });
 
-        // If not found with converted ID, try direct match
         if (!user) {
           user = await userCollection.findOne({ _id: userId });
         }
@@ -387,17 +331,17 @@ export class MFindService {
       } catch (err: any) {
         return { error: true, message: `Error querying user: ${err.message}`, data: [] };
       }
-      // In runAggregation method, replace the role lookup with:
+     
       let role;
       try {
         const roleCollection = connection.collection('approle');
 
-        // Flexible role lookup
+        
         role = await roleCollection.findOne({
           _id: this.convertToId(roleId)
         });
 
-        // If not found with converted ID, try direct match
+       
         if (!role) {
           role = await roleCollection.findOne({ _id: roleId });
         }
@@ -460,9 +404,9 @@ export class MFindService {
     }
   }
 
-  /**
-   * Get role by ID
-   */
+
+//================================Get role by ID========================================
+   
   async getRoleById(appName: string, roleId: string) {
     if (!appName || !roleId) throw new BadRequestException('appName and roleId are required');
 
@@ -493,9 +437,9 @@ export class MFindService {
     }
   }
 
-  /**
-   * Check user access for a module
-   */
+  
+//===================== Check user access for a module===========================
+   
   async checkUserAccess(appName: string, roleId: string, moduleName: string) {
     if (!appName || !roleId || !moduleName) {
       throw new BadRequestException('appName, roleId, and moduleName are required');
