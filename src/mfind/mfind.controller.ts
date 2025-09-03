@@ -2,7 +2,7 @@
 import { Controller, Post, Body, Headers, Param, Get, UnauthorizedException, BadRequestException, Req } from '@nestjs/common';
 import { MFindService } from './mfind.service';
 
-@Controller('mfind')
+@Controller()
 export class MFindController {
   constructor(private readonly mfindService: MFindService) {}
 
@@ -13,7 +13,7 @@ export class MFindController {
   }
 
   // 🔹 Run Aggregation with Token
-  @Post()
+  @Post(`mfind`)
   async find(
     @Body() body: any,
     @Headers('authorization') authHeader: string,
