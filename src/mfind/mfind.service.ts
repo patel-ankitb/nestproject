@@ -102,17 +102,6 @@ export class MFindService {
     }
   }
 
-  //=================================Get the database name for a given appName======================================
-  private async getDbName(appName: string): Promise<string> {
-    try {
-      const { dbName } = await this.resolveAppConfig(appName);
-      return dbName;
-    } catch (error: any) {
-      this.logError('getDbName', error, { appName });
-      throw new BadRequestException(`Failed to get database name for appName: ${appName}. Error: ${error.message}`);
-    }
-  }
-
   //=======================================Get dynamic tenant DB connection===========================================
   private async getDynamicDb(appName: string): Promise<{ db: any; cn_str: string; dbName: string }> {
     try {
