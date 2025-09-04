@@ -2,11 +2,11 @@ import { Controller, Post, Body, Req, BadRequestException } from '@nestjs/common
 import { MFindService } from './publicmfind.service';
 import type { Request } from 'express';
 
-@Controller('public')
+@Controller('api')
 export class MFindController {
   constructor(private readonly mfindService: MFindService) {}
 
-  @Post('mfind')
+  @Post('dynamic/mfind/public')
   async fetchModuleData(@Req() req: Request, @Body() body: any) {
     const key = req.headers['x-api-key'];
     if (!key) throw new BadRequestException("Key is required in headers");
