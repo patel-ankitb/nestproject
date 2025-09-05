@@ -108,7 +108,7 @@ if (isEdit || body.docId) {
 
   if (!canEdit) {
     throw new BadRequestException(
-      `Editing not allowed for module '${moduleName}'`,
+      `Editing not allowed for modules   '${moduleName}'`,
     );
   }
 
