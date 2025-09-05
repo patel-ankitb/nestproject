@@ -7,7 +7,7 @@ export class AdddEditMFindController {
   constructor(private readonly mfindService: AddEditMFindService) {}
 
   // single endpoint for add/edit
-  @Post('dynamic/submitData')
+  @Post('dyn/submitdata')
   async save(@Req() req: Request, @Body() body: any) {
     // 👉 payload is optional now, no error throw
 
