@@ -1,5 +1,5 @@
     import { Module } from '@nestjs/common';
-    import { AdddEditMFindController } from './addeditmfind.controller';
+    import { AdddEditMFindController } from './addeditmfinds.controller';
     import { AddEditMFindService } from './addeditmfind.service';
     
     @Module({
@@ -8,4 +8,3 @@
     })
     export class addeditmfindmodule {}
 
-    
