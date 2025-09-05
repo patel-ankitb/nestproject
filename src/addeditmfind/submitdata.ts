@@ -3,7 +3,7 @@ import type { Request } from 'express';
 import { AddEditMFindService } from './addeditmfind.service';
 
 @Controller('api')
-export class AdddEditMFindController {
+export class submitdata {
   constructor(private readonly mfindService: AddEditMFindService) {}
 
   // single endpoint for add/edit

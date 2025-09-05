@@ -1,9 +1,9 @@
     import { Module } from '@nestjs/common';
-    import { AdddEditMFindController } from './addeditmfinds.controller';
+    import {  submitdata } from './submitdata';
     import { AddEditMFindService } from './addeditmfind.service';
     
     @Module({
-      controllers: [AdddEditMFindController],
+      controllers: [submitdata],
       providers: [AddEditMFindService]
     })
     export class addeditmfindmodule {}
