@@ -129,13 +129,13 @@ if (isEdit || body.docId) {
   delete updateData._id;
   delete updateData.docId;
 
-  // ✅ build nested $set => sectionData.moduleName.key
+  // ✅ build nested $set => sectiondata.moduleName.key
   const setData: any = {};
-  for (const [key, value] of Object.entries(updateData)) {
-    setData[`sectionData.${moduleName}.${key}`] = value;
+  for (const [field, value] of Object.entries(updateData)) {
+    setData[`sectiondata.${moduleName}.${field}`] = value;
   }
 
-  const result = await collection.updateOne(filter, { $set: setData });
+  const result = await collection.updateOne(filter, { $set: body.body });
 
   if (result.matchedCount === 0) {
     throw new BadRequestException(

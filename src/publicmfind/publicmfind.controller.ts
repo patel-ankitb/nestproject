@@ -6,7 +6,7 @@ import type { Request } from 'express';
 export class PublicMFindController {
   constructor(private readonly mfindService: PublicMFindService) {}
 
-  @Post('dynamic/mfind/public')
+  @Post('dynamic/getdata/public')
   async fetchModuleData(@Req() req: Request, @Body() body: any) {
     const key = req.headers['x-api-key'];
     if (!key) throw new BadRequestException("Key is required in headers");
