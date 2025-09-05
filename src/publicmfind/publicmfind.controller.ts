@@ -1,10 +1,10 @@
 import { Controller, Post, Body, Req, BadRequestException } from '@nestjs/common';
-import { MFindService } from './publicmfind.service';
+import {  PublicMFindService } from './publicmfind.service';
 import type { Request } from 'express';
 
 @Controller('api')
-export class MFindController {
-  constructor(private readonly mfindService: MFindService) {}
+export class PublicMFindController {
+  constructor(private readonly mfindService: PublicMFindService) {}
 
   @Post('dynamic/mfind/public')
   async fetchModuleData(@Req() req: Request, @Body() body: any) {

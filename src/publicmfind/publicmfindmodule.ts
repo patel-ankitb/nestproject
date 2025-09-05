@@ -1,9 +1,9 @@
 import { Module } from '@nestjs/common';
-import { MFindController } from './publicmfind.controller';
-import { MFindService } from './publicmfind.service';
+import { PublicMFindController } from './publicmfind.controller';
+import {  PublicMFindService } from './publicmfind.service';
 
 @Module({
-  controllers: [MFindController],
-  providers: [MFindService]
+  controllers: [PublicMFindController],
+  providers: [PublicMFindService]
 })
 export class publicmfindmodule {}

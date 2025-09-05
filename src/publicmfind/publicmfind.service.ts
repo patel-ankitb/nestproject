@@ -2,7 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import mongoose, { Connection } from 'mongoose';
 
 @Injectable()
-export class MFindService {
+export class PublicMFindService {
   private connections: Map<string, Connection> = new Map();
   private readonly MONGO_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
 
