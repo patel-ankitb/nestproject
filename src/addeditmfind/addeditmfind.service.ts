@@ -94,24 +94,28 @@ export class AddEditMFindService {
     }
 
     const collection = connection.collection(moduleName);
-// 🟢 EDIT flow
-// 🟢 EDIT flow
+// helper: flatten object to dot-notation (skip add/remove keys)
+function flattenObject(obj: any, parentKey = '', res: any = {}) {
+  for (const [key, value] of Object.entries(obj)) {
+    const newKey = parentKey ? `${parentKey}.${key}` : key;
+
+    if (
+      value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      !('add' in value) &&
+      !('remove' in value)
+    ) {
+      flattenObject(value, newKey, res); // recurse deeper
+    } else {
+      res[newKey] = value;
+    }
+  }
+  return res;
+}
+
 // 🟢 EDIT flow
 if (isEdit || body.docId) {
-  let canEdit = false;
-
-  if (typeof moduleConfig === 'string') {
-    canEdit = true;
-  } else if (moduleConfig) {
-    canEdit = !!(moduleConfig.isedit ?? moduleConfig.canEdit ?? true);
-  }
-
-  if (!canEdit) {
-    throw new BadRequestException(
-      `Editing not allowed for modules   '${moduleName}'`,
-    );
-  }
-
   const docIdFromBody = body.docId;
   if (!docIdFromBody) {
     throw new BadRequestException('docId is required for edit operation');
@@ -119,42 +123,77 @@ if (isEdit || body.docId) {
 
   const filter: any = { _id: String(docIdFromBody) };
 
-  // ✅ extract data from body[moduleName]
-  const updateData =
-    body[moduleName] && typeof body[moduleName] === 'object'
-      ? body[moduleName]
-      : body;
+  // ✅ take only "body"
+  const updateData = body.body ?? body;
 
-  // ❌ remove reserved keys
   delete updateData._id;
   delete updateData.docId;
 
-  // ✅ build nested $set => sectiondata.moduleName.key
+  const flatData = flattenObject(updateData);
+
   const setData: any = {};
-  for (const [field, value] of Object.entries(updateData)) {
-    setData[`sectiondata.${moduleName}.${field}`] = value;
+  const pushData: any = {};
+  const pullData: any = {};
+  const unsetData: any = {};
+
+  for (const [field, value] of Object.entries(flatData)) {
+    if (typeof value === 'object' && value !== null) {
+      const v: any = value;
+
+      if (v.add && Array.isArray(v.add)) {
+        pushData[field] = { $each: v.add }; // ✅ add to array
+        continue; // 🚨 skip $set
+      }
+
+      if (v.remove && Array.isArray(v.remove)) {
+        // ✅ primitive values → use $in
+        if (typeof v.remove[0] !== 'object') {
+          pullData[field] = { $in: v.remove };
+        } else {
+          // ✅ objects → need multiple $pull operations
+          pullData[field] = v.remove;
+        }
+        continue; // 🚨 skip $set
+      }
+    }
+
+    // 🚀 Support deleting a field/array with null
+    if (value === null) {
+      unsetData[field] = "";
+    } else {
+      setData[field] = value; // ✅ normal overwrite
+    }
   }
 
-  const result = await collection.updateOne(filter, { $set: body.body });
+  // ✅ build update object safely
+  const updateOps: any = {};
+  if (Object.keys(setData).length) updateOps.$set = setData;
+  if (Object.keys(pushData).length) updateOps.$push = pushData;
+  if (Object.keys(unsetData).length) updateOps.$unset = unsetData;
 
-  if (result.matchedCount === 0) {
-    throw new BadRequestException(
-      `No document found with docId '${docIdFromBody}' in '${moduleName}'`,
-    );
+  // ✅ handle pull properly
+  if (Object.keys(pullData).length) {
+    updateOps.$pull = {};
+    for (const [field, val] of Object.entries(pullData)) {
+      if (Array.isArray(val)) {
+        // multiple objects remove → each one with $or
+        updateOps.$pull[field] = { $or: val };
+      } else {
+        updateOps.$pull[field] = val;
+      }
+    }
   }
+
+  const result = await collection.updateOne(filter, updateOps);
 
   return {
     success: true,
     action: 'edit',
-    message:
-      result.modifiedCount > 0
-        ? 'Document updated successfully'
-        : `No changes provided for docId '${docIdFromBody}'`,
+    updateOps,
     matchedCount: result.matchedCount,
     modifiedCount: result.modifiedCount,
   };
 }
-
 
 
     // 🟢 ADD flow (only when no docId is passed)
