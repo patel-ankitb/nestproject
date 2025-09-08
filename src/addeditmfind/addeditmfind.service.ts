@@ -18,7 +18,6 @@ export class AddEditMFindService {
     return connection;
   }
 
-  // 🔑 fetch dbName + allowed modules dynamically
   private async getDbConfigFromKey(
     key: string,
   ): Promise<{ db: string; modules: any[] }> {
@@ -26,16 +25,16 @@ export class AddEditMFindService {
     const configCollection = configConnection.collection('appconfigs');
 
     const config = await configCollection.findOne({
-      'sectiondata.appconfigs.key': key,
+      'sectionData.appconfigs.key': key,
     });
 
-    if (!config || !config.sectiondata?.appconfigs?.db) {
+    if (!config || !config.sectionData?.appconfigs?.db) {
       throw new BadRequestException(`No database found for key '${key}'`);
     }
 
     return {
-      db: config.sectiondata.appconfigs.db,
-      modules: config.sectiondata.appconfigs.modules || [],
+      db: config.sectionData.appconfigs.db,
+      modules: config.sectionData.appconfigs.modules || [],
     };
   }
 
@@ -48,8 +47,6 @@ export class AddEditMFindService {
       skip = 0,
       order = 'ascending',
       sortBy = '_id',
-      docId,
-      payload = {},
       isAdd,
       isEdit,
     } = body;
@@ -60,10 +57,8 @@ export class AddEditMFindService {
       throw new BadRequestException('moduleName is required in body');
     }
 
-    // ✅ Find DB + modules from config
     const { db, modules } = await this.getDbConfigFromKey(key);
 
-    // ✅ Match correct module config
     const moduleConfig = modules.find((m: any) => {
       if (typeof m === 'string') return m === moduleName;
       if (m && typeof m === 'object') {
@@ -84,7 +79,6 @@ export class AddEditMFindService {
 
     const connection = await this.getConnection(db);
 
-    // ✅ Ensure collection exists
     const collections = await connection.db!.listCollections().toArray();
     const exists = collections.some((c) => c.name === moduleName);
     if (!exists) {
@@ -94,109 +88,137 @@ export class AddEditMFindService {
     }
 
     const collection = connection.collection(moduleName);
-// helper: flatten object to dot-notation (skip add/remove keys)
-function flattenObject(obj: any, parentKey = '', res: any = {}) {
-  for (const [key, value] of Object.entries(obj)) {
-    const newKey = parentKey ? `${parentKey}.${key}` : key;
 
-    if (
-      value &&
-      typeof value === 'object' &&
-      !Array.isArray(value) &&
-      !('add' in value) &&
-      !('remove' in value)
-    ) {
-      flattenObject(value, newKey, res); // recurse deeper
-    } else {
-      res[newKey] = value;
-    }
-  }
-  return res;
-}
+    // Helper: flatten object but skip special keywords
+    function flattenObject(obj: any, parentKey = '', res: any = {}) {
+      for (const [key, value] of Object.entries(obj)) {
+        const newKey = parentKey ? `${parentKey}.${key}` : key;
 
-// 🟢 EDIT flow
-if (isEdit || body.docId) {
-  const docIdFromBody = body.docId;
-  if (!docIdFromBody) {
-    throw new BadRequestException('docId is required for edit operation');
-  }
-
-  const filter: any = { _id: String(docIdFromBody) };
-
-  // ✅ take only "body"
-  const updateData = body.body ?? body;
-
-  delete updateData._id;
-  delete updateData.docId;
-
-  const flatData = flattenObject(updateData);
-
-  const setData: any = {};
-  const pushData: any = {};
-  const pullData: any = {};
-  const unsetData: any = {};
-
-  for (const [field, value] of Object.entries(flatData)) {
-    if (typeof value === 'object' && value !== null) {
-      const v: any = value;
-
-      if (v.add && Array.isArray(v.add)) {
-        pushData[field] = { $each: v.add }; // ✅ add to array
-        continue; // 🚨 skip $set
-      }
-
-      if (v.remove && Array.isArray(v.remove)) {
-        // ✅ primitive values → use $in
-        if (typeof v.remove[0] !== 'object') {
-          pullData[field] = { $in: v.remove };
+        if (
+          value &&
+          typeof value === 'object' &&
+          !Array.isArray(value) &&
+          !('add' in value) &&
+          !('remove' in value) &&
+          !('removeField' in value) &&
+          !('addFields' in value)
+        ) {
+          flattenObject(value, newKey, res);
         } else {
-          // ✅ objects → need multiple $pull operations
-          pullData[field] = v.remove;
+          res[newKey] = value;
         }
-        continue; // 🚨 skip $set
       }
+      return res;
     }
 
-    // 🚀 Support deleting a field/array with null
-    if (value === null) {
-      unsetData[field] = "";
-    } else {
-      setData[field] = value; // ✅ normal overwrite
-    }
-  }
-
-  // ✅ build update object safely
-  const updateOps: any = {};
-  if (Object.keys(setData).length) updateOps.$set = setData;
-  if (Object.keys(pushData).length) updateOps.$push = pushData;
-  if (Object.keys(unsetData).length) updateOps.$unset = unsetData;
-
-  // ✅ handle pull properly
-  if (Object.keys(pullData).length) {
-    updateOps.$pull = {};
-    for (const [field, val] of Object.entries(pullData)) {
-      if (Array.isArray(val)) {
-        // multiple objects remove → each one with $or
-        updateOps.$pull[field] = { $or: val };
-      } else {
-        updateOps.$pull[field] = val;
+    // 🟢 EDIT flow
+    if (isEdit || body.docId) {
+      const docIdFromBody = String(body.docId || '');
+      if (!docIdFromBody) {
+        throw new BadRequestException('docId is required for edit operation');
       }
+
+      const filter: any = { _id: docIdFromBody };
+
+      const updateData =
+        body.body ?? body.update ?? body.payload ?? null;
+
+      if (!updateData || typeof updateData !== 'object') {
+        throw new BadRequestException(
+          'Provide fields to update in body.body / body.update / body.payload',
+        );
+      }
+
+      const flatData = flattenObject(updateData);
+
+      const setData: Record<string, any> = {};
+      const pushData: Record<string, any> = {};
+      const pullData: Record<string, any> = {};
+      const unsetData: Record<string, ''> = {};
+      const arrayFilters: any[] = [];
+
+      for (const [field, value] of Object.entries(flatData)) {
+        if (typeof value === 'object' && value !== null) {
+          const v: any = value;
+
+          // handle add to array
+          if (v.add && Array.isArray(v.add)) {
+            pushData[field] = { $each: v.add };
+            continue;
+          }
+
+          // handle remove whole objects from array
+          if (v.remove && Array.isArray(v.remove)) {
+            const first = v.remove[0];
+            if (
+              first === null ||
+              ['string', 'number', 'boolean'].includes(typeof first)
+            ) {
+              pullData[field] = { $in: v.remove };
+            } else if (typeof first === 'object') {
+              if (v.remove.length === 1) {
+                pullData[field] = v.remove[0];
+              } else {
+                pullData[field] = { $or: v.remove };
+              }
+            }
+            continue;
+          }
+
+          // ✅ handle removeField + addFields together safely
+          if (v.matchField && v.matchValue !== undefined) {
+            // removeField only if it's NOT also being re-added
+            if (
+              v.removeField &&
+              (!v.addFields || !(v.removeField in v.addFields))
+            ) {
+              unsetData[`${field}.$[elem].${v.removeField}`] = '';
+            }
+
+            // add/overwrite fields if provided
+            if (v.addFields && typeof v.addFields === 'object') {
+              for (const [k, val] of Object.entries(v.addFields)) {
+                setData[`${field}.$[elem].${k}`] = val;
+              }
+            }
+
+            // filter for matching element
+            arrayFilters.push({ [`elem.${v.matchField}`]: v.matchValue });
+            continue;
+          }
+        }
+
+        // null values → unset scalar
+        if (value === null) {
+          unsetData[field] = '';
+        } else {
+          setData[field] = value;
+        }
+      }
+
+      const updateOps: any = {};
+      if (Object.keys(setData).length) updateOps.$set = setData;
+      if (Object.keys(pushData).length) updateOps.$push = pushData;
+      if (Object.keys(unsetData).length) updateOps.$unset = unsetData;
+      if (Object.keys(pullData).length) updateOps.$pull = pullData;
+
+      if (!Object.keys(updateOps).length) {
+        throw new BadRequestException('No valid fields found to update');
+      }
+
+      const options = arrayFilters.length ? { arrayFilters } : {};
+      const result = await collection.updateOne(filter, updateOps, options);
+
+      return {
+        success: true,
+        action: 'edit',
+        updateOps,
+        matchedCount: result.matchedCount,
+        modifiedCount: result.modifiedCount,
+      };
     }
-  }
 
-  const result = await collection.updateOne(filter, updateOps);
-
-  return {
-    success: true,
-    action: 'edit',
-    updateOps,
-    matchedCount: result.matchedCount,
-    modifiedCount: result.modifiedCount,
-  };
-}
-
-
-    // 🟢 ADD flow (only when no docId is passed)
+    // 🟢 ADD flow
     if (isAdd) {
       let canAdd = false;
 
@@ -212,7 +234,7 @@ if (isEdit || body.docId) {
         );
       }
 
-      // ✅ always assign string _id
+      const payload = body.payload ?? {};
       if (!payload._id) {
         payload._id = Date.now().toString();
       } else {
