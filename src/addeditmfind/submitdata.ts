@@ -10,7 +10,7 @@ export class submitdata {
   @Post('dynamic/submitdata')
   async save(@Req() req: Request, @Body() body: any) {
     // 👉 payload is optional now, no error throw
-
+    // console.log('Received payload:', body);
     if (body.docId) {
       body.isEdit = true;   // if docId given → EDIT mode
     } else {

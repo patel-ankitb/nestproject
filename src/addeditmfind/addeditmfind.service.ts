@@ -4,132 +4,160 @@ import mongoose, { Connection } from 'mongoose';
 @Injectable()
 export class AddEditMFindService {
   private connections: Map<string, Connection> = new Map();
-  private readonly MONGO_URI =
+  private readonly BASE_URI =
     process.env.MONGO_URI || 'mongodb://127.0.0.1:27017';
 
-  private async getConnection(dbName: string): Promise<Connection> {
-    if (this.connections.has(dbName)) {
-      return this.connections.get(dbName)!;
-    }
-    const connection = await mongoose
-      .createConnection(this.MONGO_URI, { dbName })
-      .asPromise();
-    this.connections.set(dbName, connection);
+  // ===== Connection Pool =====
+  private async getConnection(cn_str: string, dbName: string): Promise<Connection> {
+    const cacheKey = `${cn_str}_${dbName}`;
+    if (this.connections.has(cacheKey)) return this.connections.get(cacheKey)!;
+    const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
+    this.connections.set(cacheKey, connection);
     return connection;
   }
 
-  private async getDbConfigFromKey(
-    key: string,
-  ): Promise<{ db: string; modules: any[] }> {
-    const configConnection = await this.getConnection('configdb');
-    const configCollection = configConnection.collection('appconfigs');
-
-    const config = await configCollection.findOne({
+  // ===== Get DB config from header key =====
+  private async getDbConfigFromKey(key: string) {
+    const configConn = await this.getConnection(this.BASE_URI, 'configdb');
+    const config = await configConn.collection('appconfigs').findOne({
       'sectionData.appconfigs.key': key,
     });
-
-    if (!config || !config.sectionData?.appconfigs?.db) {
+    if (!config?.sectionData?.appconfigs?.db) {
       throw new BadRequestException(`No database found for key '${key}'`);
     }
-
     return {
       db: config.sectionData.appconfigs.db,
       modules: config.sectionData.appconfigs.modules || [],
     };
   }
 
-  async getModuleData(headers: any, body: any) {
-    const {
-      moduleName,
-      query = {},
-      projection = {},
-      limit = 10,
-      skip = 0,
-      order = 'ascending',
-      sortBy = '_id',
-      isAdd,
-      isEdit,
-    } = body;
+  // ===== Flatten helper =====
+  private flattenObject(obj: any, parentKey = '', res: any = {}) {
+    for (const [key, value] of Object.entries(obj)) {
+      const newKey = parentKey ? `${parentKey}.${key}` : key;
+      if (
+        value &&
+        typeof value === 'object' &&
+        !Array.isArray(value) &&
+        !('add' in (value as any)) &&
+        !('remove' in (value as any)) &&
+        !('removeField' in (value as any)) &&
+        !('addFields' in (value as any))
+      ) {
+        this.flattenObject(value, newKey, res);
+      } else {
+        res[newKey] = value;
+      }
+    }
+    return res;
+  }
 
-    const key = headers['x-api-key'];
-    if (!key) throw new BadRequestException('Key must be provided in headers');
-    if (!moduleName) {
-      throw new BadRequestException('moduleName is required in body');
+  // ===== Fetch modules by docId =====
+  private async getModuleByName(docId: string, moduleName: string) {
+    const configConn = await this.getConnection(this.BASE_URI, 'configdb');
+    console.log('Fetching module by name:', { docId, moduleName });
+
+    const filter: any = mongoose.isValidObjectId(docId)
+      ? { _id: new mongoose.Types.ObjectId(docId) }
+      : { _id: docId };
+
+    let config: any = await configConn.collection('appconfigs').findOne(filter);
+    if (!config) {
+      const cleanModuleName = moduleName?.trim();
+      if (cleanModuleName) {
+        const altFilter = {
+          $or: [
+            { 'sectionData.appconfigs.modules': cleanModuleName },
+            { 'sectionData.appconfigs.modules.moduleName': cleanModuleName },
+            { 'sectionData.appconfigs.modules.name': cleanModuleName },
+            { 'sectionData.appconfigs.modules.module': cleanModuleName },
+          ],
+        };
+        const altConfig = await configConn.collection('appconfigs').findOne(altFilter);
+        if (altConfig) config = altConfig;
+      }
     }
 
-    const { db, modules } = await this.getDbConfigFromKey(key);
+    console.log('Config fetched for getModuleByName:', config);
+    if (!config?.sectionData?.appconfigs?.modules) {
+      throw new BadRequestException(`Modules not found for docId '${docId}'`);
+    }
 
-    const moduleConfig = modules.find((m: any) => {
-      if (typeof m === 'string') return m === moduleName;
+    const cleanModuleName = moduleName.trim();
+    const moduleObj = config.sectionData.appconfigs.modules.find((m: any) => {
+      if (typeof m === 'string') return m.trim() === cleanModuleName;
       if (m && typeof m === 'object') {
-        return (
-          m.moduleName === moduleName ||
-          m.name === moduleName ||
-          m.module === moduleName
-        );
+        const names = [m.moduleName, m.name, m.module].filter(Boolean).map((n: string) => n.trim());
+        return names.includes(cleanModuleName);
       }
       return false;
     });
 
-    if (!moduleConfig) {
-      throw new BadRequestException(
-        `Module '${moduleName}' not allowed for key '${key}'`,
-      );
+    if (!moduleObj) {
+      throw new BadRequestException(`Module '${cleanModuleName}' not found in docId '${docId}'`);
     }
 
-    const connection = await this.getConnection(db);
+    return moduleObj;
+  }
 
-    const collections = await connection.db!.listCollections().toArray();
-    const exists = collections.some((c) => c.name === moduleName);
-    if (!exists) {
-      throw new BadRequestException(
-        `Collection '${moduleName}' does not exist in database '${db}'`,
-      );
+  // ===== Main Entry =====
+  async getModuleData(headers: any, body: any) {
+    const {
+      moduleName,
+      docId,
+      payload = {},
+      body: updateBody,
+      isAdd,
+      isEdit,
+      appName,
+      query = {},
+      projection = {},
+      limit = 10,
+      skip = 0,
+      sortBy = '_id',
+      order = 'ascending',
+    } = body;
+
+    if (!moduleName) throw new BadRequestException('moduleName is required');
+    if (!appName) throw new BadRequestException('appName is required');
+
+    const key = headers['x-api-key'];
+    if (!key) throw new BadRequestException('x-api-key header is required');
+
+    // ===== DB connection =====
+    const config = await this.getDbConfigFromKey(key);
+    const conn = await this.getConnection(this.BASE_URI, config.db);
+    const db = conn.db;
+    if (!db) throw new BadRequestException('Database connection failed');
+
+    // ===== Module config =====
+    const moduleConfig = await this.getModuleByName(docId, moduleName);
+    const cleanModuleName = moduleName.trim();
+    if (!moduleConfig) throw new BadRequestException(`Module '${cleanModuleName}' not allowed`);
+
+    // ensure collection exists
+    const collections = await db.listCollections().toArray();
+    if (!collections.some((c: any) => c.name === cleanModuleName)) {
+      await db.createCollection(cleanModuleName);
     }
-
-    const collection = connection.collection(moduleName);
-
-    // Helper: flatten object but skip special keywords
-    function flattenObject(obj: any, parentKey = '', res: any = {}) {
-      for (const [key, value] of Object.entries(obj)) {
-        const newKey = parentKey ? `${parentKey}.${key}` : key;
-
-        if (
-          value &&
-          typeof value === 'object' &&
-          !Array.isArray(value) &&
-          !('add' in value) &&
-          !('remove' in value) &&
-          !('removeField' in value) &&
-          !('addFields' in value)
-        ) {
-          flattenObject(value, newKey, res);
-        } else {
-          res[newKey] = value;
-        }
-      }
-      return res;
-    }
+    const collection = db.collection(cleanModuleName);
 
     // 🟢 EDIT flow
     if (isEdit || body.docId) {
+      console.log('Edit operation initiated', docId, body);
       const docIdFromBody = String(body.docId || '');
       if (!docIdFromBody) {
         throw new BadRequestException('docId is required for edit operation');
       }
 
       const filter: any = { _id: docIdFromBody };
-
-      const updateData =
-        body.body ?? body.update ?? body.payload ?? null;
+      const updateData = body.body ?? body.update ?? body.payload ?? null;
 
       if (!updateData || typeof updateData !== 'object') {
-        throw new BadRequestException(
-          'Provide fields to update in body.body / body.update / body.payload',
-        );
+        throw new BadRequestException('Provide fields to update in body.body / body.update / body.payload');
       }
 
-      const flatData = flattenObject(updateData);
+      const flatData = this.flattenObject(updateData);
 
       const setData: Record<string, any> = {};
       const pushData: Record<string, any> = {};
@@ -141,54 +169,35 @@ export class AddEditMFindService {
         if (typeof value === 'object' && value !== null) {
           const v: any = value;
 
-          // handle add to array
           if (v.add && Array.isArray(v.add)) {
             pushData[field] = { $each: v.add };
             continue;
           }
 
-          // handle remove whole objects from array
           if (v.remove && Array.isArray(v.remove)) {
             const first = v.remove[0];
-            if (
-              first === null ||
-              ['string', 'number', 'boolean'].includes(typeof first)
-            ) {
+            if (first === null || ['string', 'number', 'boolean'].includes(typeof first)) {
               pullData[field] = { $in: v.remove };
             } else if (typeof first === 'object') {
-              if (v.remove.length === 1) {
-                pullData[field] = v.remove[0];
-              } else {
-                pullData[field] = { $or: v.remove };
-              }
+              pullData[field] = v.remove.length === 1 ? v.remove[0] : { $or: v.remove };
             }
             continue;
           }
 
-          // ✅ handle removeField + addFields together safely
           if (v.matchField && v.matchValue !== undefined) {
-            // removeField only if it's NOT also being re-added
-            if (
-              v.removeField &&
-              (!v.addFields || !(v.removeField in v.addFields))
-            ) {
+            if (v.removeField && (!v.addFields || !(v.removeField in v.addFields))) {
               unsetData[`${field}.$[elem].${v.removeField}`] = '';
             }
-
-            // add/overwrite fields if provided
             if (v.addFields && typeof v.addFields === 'object') {
               for (const [k, val] of Object.entries(v.addFields)) {
                 setData[`${field}.$[elem].${k}`] = val;
               }
             }
-
-            // filter for matching element
             arrayFilters.push({ [`elem.${v.matchField}`]: v.matchValue });
             continue;
           }
         }
 
-        // null values → unset scalar
         if (value === null) {
           unsetData[field] = '';
         } else {
@@ -212,46 +221,28 @@ export class AddEditMFindService {
       return {
         success: true,
         action: 'edit',
-        updateOps,
         matchedCount: result.matchedCount,
         modifiedCount: result.modifiedCount,
+        updateOps,
       };
     }
 
-    // 🟢 ADD flow
+    // ===== ADD =====
     if (isAdd) {
-      let canAdd = false;
-
-      if (typeof moduleConfig === 'string') {
-        canAdd = true;
-      } else if (moduleConfig) {
+      let canAdd = true;
+      if (moduleConfig && typeof moduleConfig === 'object') {
         canAdd = !!(moduleConfig.isadd ?? moduleConfig.canAdd ?? true);
       }
+      if (!canAdd) throw new BadRequestException(`Adding not allowed for module '${cleanModuleName}'`);
 
-      if (!canAdd) {
-        throw new BadRequestException(
-          `Adding not allowed for module '${moduleName}'`,
-        );
-      }
+      if (!payload._id) payload._id = Date.now().toString();
+      else payload._id = String(payload._id);
 
-      const payload = body.payload ?? {};
-      if (!payload._id) {
-        payload._id = Date.now().toString();
-      } else {
-        payload._id = String(payload._id);
-      }
-
-      const result = await collection.insertOne(payload);
-
-      return {
-        success: true,
-        action: 'add',
-        message: 'Document added successfully',
-        insertedId: result.insertedId,
-      };
+      const resultAdd = await collection.insertOne(payload);
+      return { success: true, action: 'add', message: 'Document added', insertedId: resultAdd.insertedId };
     }
 
-    // 🟢 FETCH flow
+    // ===== FETCH =====
     const pipeline: any[] = [];
     if (Object.keys(query).length) pipeline.push({ $match: query });
     if (Object.keys(projection).length) pipeline.push({ $project: projection });
@@ -265,8 +256,7 @@ export class AddEditMFindService {
     return {
       success: true,
       action: 'fetch',
-      db,
-      moduleName,
+      moduleName: cleanModuleName,
       count: documents.length,
       totalCount,
       data: documents,
