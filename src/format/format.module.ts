@@ -1,11 +1,11 @@
 import { Module } from '@nestjs/common';
-import { formatService } from './format.service';
+import { FormatService } from './format.service';
 import { formatController } from './format.controlelr';
 
 
 @Module({
     controllers: [formatController],
-    providers: [formatService]
+    providers: [FormatService]
 })
 export class formatmodule { }
 

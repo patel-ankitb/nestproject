@@ -2,7 +2,7 @@ import { Injectable, BadRequestException } from '@nestjs/common';
 import mongoose, { Connection } from 'mongoose';
 
 @Injectable()
-export class formatService {
+export class FormatService {
   private connections: Map<string, Connection> = new Map();
   private readonly BASE_URI =
     process.env.MONGO_URI || 'mongodb://127.0.0.1:27017';
@@ -21,6 +21,7 @@ export class formatService {
     return connection;
   }
 
+  // ===== Get DB Config =====
   private async getDbConfigFromKey(key: string) {
     const configConn = await this.getConnection(this.BASE_URI, 'configdb');
     const config = await configConn.collection('appconfigs').findOne({
@@ -28,50 +29,39 @@ export class formatService {
     });
 
     if (!config) {
-      console.error('Config not found for key:', key);
       throw new BadRequestException(`No config found for key '${key}'`);
     }
     if (!config?.sectionData?.appconfigs?.db) {
-      console.error('DB not found in config:', config);
       throw new BadRequestException(`No database found for key '${key}'`);
     }
 
-// ===== Extract min & max from sectionData.newModel.price =====
-let minPrice: number | null = null;
-let maxPrice: number | null = null;
+    // Extract single price min/max from config (optional preview)
+    let minPrice: number | null = null;
+    let maxPrice: number | null = null;
 
-const rawPrice = config?.sectionData?.newModel?.price ?? null;
-console.log('Raw price from config:', rawPrice);
+    const rawPrice = config?.sectionData?.newModel?.price ?? null;
+    if (rawPrice && typeof rawPrice === 'string') {
+      const normalized = rawPrice
+        .replace(/–/g, '-') // en dash → hyphen
+        .replace(/₹/g, '')
+        .replace(/Lakh/gi, ' Lakh')
+        .replace(/Crore/gi, ' Crore')
+        .trim();
 
-if (rawPrice && typeof rawPrice === 'string') {
-  const normalized = rawPrice
-    .toString()
-    .replace(/–/g, '-')         // replace en dash with hyphen
-    .replace(/₹/g, '')          // remove ₹
-    .replace(/Lakh/gi, '')      // remove "Lakh"
-    .replace(/Crore/gi, '*100') // mark Crore for scaling later
-    .trim();
+      const parts = normalized.split('-').map((p) => p.trim());
 
-  const parts = normalized.split('-').map((p) => p.trim());
+      const parseVal = (val: string): number | null => {
+        if (!val) return null;
+        let num = parseFloat(val.replace(/[^\d.]/g, ''));
+        if (isNaN(num)) return null;
+        if (/Crore/i.test(val)) return num * 10000000;
+        if (/Lakh/i.test(val)) return num * 100000;
+        return num;
+      };
 
-  if (parts.length) {
-    // parse first number
-    minPrice = parseFloat(parts[0]) || null;
-    // parse second number
-    if (parts.length > 1) {
-      maxPrice = parseFloat(parts[1]) || null;
+      minPrice = parseVal(parts[0]);
+      if (parts.length > 1) maxPrice = parseVal(parts[1]);
     }
-  }
-
-  // Scale if "Crore" found
-  if (/Crore/i.test(rawPrice)) {
-    if (minPrice) minPrice = minPrice * 100;
-    if (maxPrice) maxPrice = maxPrice * 100;
-  }
-} else {
-  console.warn('No price found in config.sectionData.newModel');
-}
-
 
     return {
       db: config.sectionData.appconfigs.db,
@@ -83,12 +73,7 @@ if (rawPrice && typeof rawPrice === 'string') {
 
   // ===== Main Entry =====
   async getModuleData(headers: any, body: any) {
-    const {
-      moduleName,
-      appName,
-      query = {},
-      projection = {},
-    } = body;
+    const { moduleName, appName, query = {}, projection = {} } = body;
 
     if (!moduleName) throw new BadRequestException('moduleName is required');
     if (!appName) throw new BadRequestException('appName is required');
@@ -98,7 +83,6 @@ if (rawPrice && typeof rawPrice === 'string') {
 
     // ===== DB connection =====
     const config = await this.getDbConfigFromKey(key);
-    console.log('Config fetched for getModuleData:', config);
     const conn = await this.getConnection(this.BASE_URI, config.db);
     const db = conn.db;
     if (!db) throw new BadRequestException('Database connection failed');
@@ -109,169 +93,191 @@ if (rawPrice && typeof rawPrice === 'string') {
       throw new BadRequestException(`Collection '${moduleName}' not found`);
     }
     const collection = db.collection(moduleName);
-await collection.updateMany(
-  { "sectionData.newModel.price": { $ne: null } },
-  [
-    {
-      $set: {
-        priceNormalized: {
-          $replaceAll: {
-            input: { $toString: "$sectionData.newModel.price" },
-            find: "–",
-            replacement: "-"
-          }
-        }
-      }
-    },
-    {
-      $set: {
-        minRaw: {
-          $arrayElemAt: [{ $split: ["$priceNormalized", "-"] }, 0]
-        },
-        maxRaw: {
-          $arrayElemAt: [{ $split: ["$priceNormalized", "-"] }, 1]
-        }
-      }
-    },
-    {
-      $set: {
-        "sectionData.newModel.minPrice": {
-          $toString: {
-            $cond: [
-              { $regexMatch: { input: "$minRaw", regex: "Crore", options: "i" } },
-              {
-                $multiply: [
-                  {
-                    $convert: {
-                      input: {
-                        $trim: {
-                          input: {
-                            $replaceAll: {
-                              input: {
-                                $replaceAll: { input: "$minRaw", find: "₹", replacement: "" }
-                              },
-                              find: "Crore",
-                              replacement: ""
-                            }
-                          },
-                          chars: " "
-                        }
-                      },
-                      to: "double",
-                      onError: 0,
-                      onNull: 0
-                    }
-                  },
-                  10000000 // ✅ 1 Crore = 10,000,000
-                ]
-              },
-              {
-                $multiply: [
-                  {
-                    $convert: {
-                      input: {
-                        $trim: {
-                          input: {
-                            $replaceAll: {
-                              input: {
-                                $replaceAll: { input: "$minRaw", find: "₹", replacement: "" }
-                              },
-                              find: "Lakh",
-                              replacement: ""
-                            }
-                          },
-                          chars: " "
-                        }
-                      },
-                      to: "double",
-                      onError: 0,
-                      onNull: 0
-                    }
-                  },
-                  100000 // ✅ 1 Lakh = 100,000
-                ]
-              }
-            ]
-          }
-        },
-        "sectionData.newModel.maxPrice": {
-          $toString: {
-            $cond: [
-              { $regexMatch: { input: "$maxRaw", regex: "Crore", options: "i" } },
-              {
-                $multiply: [
-                  {
-                    $convert: {
-                      input: {
-                        $trim: {
-                          input: {
-                            $replaceAll: {
-                              input: {
-                                $replaceAll: { input: "$maxRaw", find: "₹", replacement: "" }
-                              },
-                              find: "Crore",
-                              replacement: ""
-                            }
-                          },
-                          chars: " "
-                        }
-                      },
-                      to: "double",
-                      onError: 0,
-                      onNull: 0
-                    }
-                  },
-                  10000000 // ✅ 1 Crore = 10,000,000
-                ]
-              },
-              {
-                $multiply: [
-                  {
-                    $convert: {
-                      input: {
-                        $trim: {
-                          input: {
-                            $replaceAll: {
-                              input: {
-                                $replaceAll: { input: "$maxRaw", find: "₹", replacement: "" }
-                              },
-                              find: "Lakh",
-                              replacement: ""
-                            }
-                          },
-                          chars: " "
-                        }
-                      },
-                      to: "double",
-                      onError: 0,
-                      onNull: 0
-                    }
-                  },
-                  100000 // ✅ 1 Lakh = 100,000
-                ]
-              }
-            ]
-          }
-        }
-      }
-    },
-    { $unset: ["priceNormalized", "minRaw", "maxRaw"] }
-  ]
-);
 
+    // ===== STEP 1: Normalize and update min/max price for each document =====
+    await collection.updateMany(
+      { 'sectionData.newModel.price': { $ne: null } },
+      [
+        {
+          $set: {
+            priceNormalized: {
+              $replaceAll: {
+                input: { $toString: '$sectionData.newModel.price' },
+                find: '–',
+                replacement: '-',
+              },
+            },
+          },
+        },
+        {
+          $set: {
+            minRaw: {
+              $arrayElemAt: [{ $split: ['$priceNormalized', '-'] }, 0],
+            },
+            maxRaw: {
+              $arrayElemAt: [{ $split: ['$priceNormalized', '-'] }, 1],
+            },
+          },
+        },
+        {
+          $set: {
+            'sectionData.newModel.minPrice': {
+              $cond: [
+                {
+                  $regexMatch: { input: '$minRaw', regex: 'Crore', options: 'i' },
+                },
+                {
+                  $multiply: [
+                    {
+                      $convert: {
+                        input: {
+                          $trim: {
+                            input: {
+                              $replaceAll: {
+                                input: {
+                                  $replaceAll: {
+                                    input: '$minRaw',
+                                    find: '₹',
+                                    replacement: '',
+                                  },
+                                },
+                                find: 'Crore',
+                                replacement: '',
+                              },
+                            },
+                            chars: ' ',
+                          },
+                        },
+                        to: 'double',
+                        onError: null,
+                        onNull: null,
+                      },
+                    },
+                    10000000,
+                  ],
+                },
+                {
+                  $multiply: [
+                    {
+                      $convert: {
+                        input: {
+                          $trim: {
+                            input: {
+                              $replaceAll: {
+                                input: {
+                                  $replaceAll: {
+                                    input: '$minRaw',
+                                    find: '₹',
+                                    replacement: '',
+                                  },
+                                },
+                                find: 'Lakh',
+                                replacement: '',
+                              },
+                            },
+                            chars: ' ',
+                          },
+                        },
+                        to: 'double',
+                        onError: null,
+                        onNull: null,
+                      },
+                    },
+                    100000,
+                  ],
+                },
+              ],
+            },
+            'sectionData.newModel.maxPrice': {
+              $cond: [
+                {
+                  $regexMatch: { input: '$maxRaw', regex: 'Crore', options: 'i' },
+                },
+                {
+                  $multiply: [
+                    {
+                      $convert: {
+                        input: {
+                          $trim: {
+                            input: {
+                              $replaceAll: {
+                                input: {
+                                  $replaceAll: {
+                                    input: '$maxRaw',
+                                    find: '₹',
+                                    replacement: '',
+                                  },
+                                },
+                                find: 'Crore',
+                                replacement: '',
+                              },
+                            },
+                            chars: ' ',
+                          },
+                        },
+                        to: 'double',
+                        onError: null,
+                        onNull: null,
+                      },
+                    },
+                    10000000,
+                  ],
+                },
+                {
+                  $multiply: [
+                    {
+                      $convert: {
+                        input: {
+                          $trim: {
+                            input: {
+                              $replaceAll: {
+                                input: {
+                                  $replaceAll: {
+                                    input: '$maxRaw',
+                                    find: '₹',
+                                    replacement: '',
+                                  },
+                                },
+                                find: 'Lakh',
+                                replacement: '',
+                              },
+                            },
+                            chars: ' ',
+                          },
+                        },
+                        to: 'double',
+                        onError: null,
+                        onNull: null,
+                      },
+                    },
+                    100000,
+                  ],
+                },
+              ],
+            },
+          },
+        },
+        { $unset: ['priceNormalized', 'minRaw', 'maxRaw'] },
+      ],
+    );
 
-    // ===== STEP 2: Aggregate collection-wide min and max =====
+    // ===== STEP 2: Aggregate collection-wide min/max =====
     const pipeline: any[] = [];
     if (Object.keys(query).length) pipeline.push({ $match: query });
     if (Object.keys(projection).length) pipeline.push({ $project: projection });
 
-    pipeline.push({ $match: { minPrice: { $ne: null }, maxPrice: { $ne: null } } });
+    pipeline.push({
+      $match: {
+        'sectionData.newModel.minPrice': { $ne: null },
+        'sectionData.newModel.maxPrice': { $ne: null },
+      },
+    });
 
     pipeline.push({
       $group: {
         _id: null,
-        minValue: { $min: '$minPrice' },
-        maxValue: { $max: '$maxPrice' },
+        minValue: { $min: '$sectionData.newModel.minPrice' },
+        maxValue: { $max: '$sectionData.newModel.maxPrice' },
       },
     });
 
