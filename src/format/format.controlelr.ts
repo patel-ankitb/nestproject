@@ -16,4 +16,5 @@ export class formatController {
       throw new BadRequestException(err.message || 'Failed to fetch data');
     }
   }
+  
 }
