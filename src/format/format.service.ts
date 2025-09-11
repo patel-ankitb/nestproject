@@ -43,7 +43,7 @@ export class FormatService {
     let maxPrice: string | null = null;
 
     const rawPrice = config?.sectionData?.newModel?.price ?? null;
-    if ( rawPrice === 'string') {
+    if (typeof rawPrice === 'string' && rawPrice.trim() !== '') {
       const normalized = rawPrice
         .replace(/–/g, '-') // en dash → hyphen
         .replace(/₹/g, '')
@@ -86,121 +86,201 @@ export class FormatService {
       throw new BadRequestException(`Collection '${moduleName}' not found`);
     }
     const collection = db.collection(moduleName);
-// ===== CASE 1: newvarinet =====
+
+    //---- new varinet special handling ----
 if (moduleName === 'newvarinet') {
   const newVariantDocs = await collection.find({}).toArray();
+
+  // Group variants by modelId
+  const grouped: Record<string, any[]> = {};
+  for (const variant of newVariantDocs) {
+    const modelId = variant?.sectionData?.newVariants?.modelId as string;
+    if (!modelId) continue;
+    if (!grouped[modelId]) grouped[modelId] = [];
+    grouped[modelId].push(variant);
+  }
+
   const updates: any[] = [];
 
-  for (const variant of newVariantDocs) {
-    const modelId = variant?.sectionData?.newVariants?.modelId;
-    if (!modelId) continue;
-
-    // ===== maxPower parsing =====
-    const maxPowerStr =
-      variant?.sectionData?.newVariants?.details?.specifications?.maxPower || 'N/A';
-
+  for (const [modelId, variants] of Object.entries(grouped)) {
     let minBhp: number | null = null;
     let maxBhp: number | null = null;
     let minPowerRpm: number | null = null;
     let maxPowerRpm: number | null = null;
-
-    let maxPowerBhpFormatted: string = 'N/A';
-    let maxPowerRpmFormatted: string = 'N/A';
-
-    if (maxPowerStr && maxPowerStr.toLowerCase() !== 'n/a') {
-      const [bhpPart, rpmPart] = maxPowerStr.split('@').map(p => p.trim());
-
-      // Parse BHP
-      if (bhpPart) {
-        const bhpNumbers = bhpPart.replace(/bhp/gi, '').split('-').map(p => parseFloat(p.trim()));
-        if (bhpNumbers.length === 1) minBhp = maxBhp = bhpNumbers[0];
-        else if (bhpNumbers.length === 2) {
-          minBhp = Math.min(bhpNumbers[0], bhpNumbers[1]);
-          maxBhp = Math.max(bhpNumbers[0], bhpNumbers[1]);
-        }
-        if (minBhp !== null && maxBhp !== null)
-          maxPowerBhpFormatted = `${minBhp}-${maxBhp} bhp`;
-      }
-
-      // Parse RPM
-      if (rpmPart) {
-        const rpmNumbers = rpmPart.replace(/rpm/gi, '').split('-').map(p => parseFloat(p.trim()));
-        if (rpmNumbers.length === 1) minPowerRpm = maxPowerRpm = rpmNumbers[0];
-        else if (rpmNumbers.length === 2) {
-          minPowerRpm = Math.min(rpmNumbers[0], rpmNumbers[1]);
-          maxPowerRpm = Math.max(rpmNumbers[0], rpmNumbers[1]);
-        }
-        if (minPowerRpm !== null && maxPowerRpm !== null)
-          maxPowerRpmFormatted = `${minPowerRpm}-${maxPowerRpm} rpm`;
-      }
-    }
-
-    // ===== maxTorque parsing =====
-    const maxTorqueStr =
-      variant?.sectionData?.newVariants?.details?.specifications?.maxTorque || 'N/A';
-
     let minTorqueNm: number | null = null;
     let maxTorqueNm: number | null = null;
     let minTorqueRpm: number | null = null;
     let maxTorqueRpm: number | null = null;
 
-    let maxTorqueNmFormatted: string = 'N/A';
-    let maxTorqueRpmFormatted: string = 'N/A';
+    // Additional fields
+    let fuelType: string | null = null;
+    let bodyType: string | null = null;
+    let seatingCapacity: string | null = null;
+    let mileage: string | null = null;
+    let transmissions: Set<string> = new Set();
 
-    if (maxTorqueStr && maxTorqueStr.toLowerCase() !== 'n/a') {
-      const [nmPart, rpmPart] = maxTorqueStr.split('@').map(p => p.trim());
-
-      // Parse Nm
-      if (nmPart) {
-        const nmNumbers = nmPart.replace(/nm/gi, '').split('-').map(p => parseFloat(p.trim()));
-        if (nmNumbers.length === 1) minTorqueNm = maxTorqueNm = nmNumbers[0];
-        else if (nmNumbers.length === 2) {
-          minTorqueNm = Math.min(nmNumbers[0], nmNumbers[1]);
-          maxTorqueNm = Math.max(nmNumbers[0], nmNumbers[1]);
+    for (const variant of variants) {
+      // ===== maxPower parsing =====
+      const maxPowerStr =
+        variant?.sectionData?.newVariants?.details?.specifications?.maxPower || 'N/A';
+      if (maxPowerStr && maxPowerStr.toLowerCase() !== 'n/a') {
+        const [bhpPart, rpmPart] = maxPowerStr.split('@').map(p => p.trim());
+        if (bhpPart) {
+          const bhpNumbers = bhpPart.replace(/bhp/gi, '').split('-').map(p => parseFloat(p.trim())).filter(p => !isNaN(p));
+          if (bhpNumbers.length >= 1) {
+            const localMinBhp = Math.min(...bhpNumbers);
+            const localMaxBhp = bhpNumbers.length === 1 ? localMinBhp : Math.max(...bhpNumbers);
+            minBhp = minBhp === null ? localMinBhp : Math.min(minBhp, localMinBhp);
+            maxBhp = maxBhp === null ? localMaxBhp : Math.max(maxBhp, localMaxBhp);
+          }
         }
-        if (minTorqueNm !== null && maxTorqueNm !== null)
-          maxTorqueNmFormatted = `${minTorqueNm}-${maxTorqueNm} Nm`;
+        if (rpmPart) {
+          const rpmNumbers = rpmPart.replace(/rpm/gi, '').split('-').map(p => parseFloat(p.trim())).filter(p => !isNaN(p));
+          if (rpmNumbers.length >= 1) {
+            const localMinRpm = Math.min(...rpmNumbers);
+            const localMaxRpm = rpmNumbers.length === 1 ? localMinRpm : Math.max(...rpmNumbers);
+            minPowerRpm = minPowerRpm === null ? localMinRpm : Math.min(minPowerRpm, localMinRpm);
+            maxPowerRpm = maxPowerRpm === null ? localMaxRpm : Math.max(maxPowerRpm, localMaxRpm);
+          }
+        }
       }
 
-      // Parse RPM
-      if (rpmPart) {
-        const rpmNumbers = rpmPart.replace(/rpm/gi, '').split('-').map(p => parseFloat(p.trim()));
-        if (rpmNumbers.length === 1) minTorqueRpm = maxTorqueRpm = rpmNumbers[0];
-        else if (rpmNumbers.length === 2) {
-          minTorqueRpm = Math.min(rpmNumbers[0], rpmNumbers[1]);
-          maxTorqueRpm = Math.max(rpmNumbers[0], rpmNumbers[1]);
+      // ===== maxTorque parsing =====
+      const maxTorqueStr =
+        variant?.sectionData?.newVariants?.details?.specifications?.maxTorque || 'N/A';
+      if (maxTorqueStr && maxTorqueStr.toLowerCase() !== 'n/a') {
+        const [nmPart, rpmPart] = maxTorqueStr.split('@').map(p => p.trim());
+        if (nmPart) {
+          const nmNumbers = nmPart.replace(/nm/gi, '').split('-').map(p => parseFloat(p.trim())).filter(p => !isNaN(p));
+          if (nmNumbers.length >= 1) {
+            const localMinNm = Math.min(...nmNumbers);
+            const localMaxNm = nmNumbers.length === 1 ? localMinNm : Math.max(...nmNumbers);
+            minTorqueNm = minTorqueNm === null ? localMinNm : Math.min(minTorqueNm, localMinNm);
+            maxTorqueNm = maxTorqueNm === null ? localMaxNm : Math.max(maxTorqueNm, localMaxNm);
+          }
         }
-        if (minTorqueRpm !== null && maxTorqueRpm !== null)
-          maxTorqueRpmFormatted = `${minTorqueRpm}-${maxTorqueRpm} rpm`;
+        if (rpmPart) {
+          const rpmNumbers = rpmPart.replace(/rpm/gi, '').split('-').map(p => parseFloat(p.trim())).filter(p => !isNaN(p));
+          if (rpmNumbers.length >= 1) {
+            const localMinRpm = Math.min(...rpmNumbers);
+            const localMaxRpm = rpmNumbers.length === 1 ? localMinRpm : Math.max(...rpmNumbers);
+            minTorqueRpm = minTorqueRpm === null ? localMinRpm : Math.min(minTorqueRpm, localMinRpm);
+            maxTorqueRpm = maxTorqueRpm === null ? localMaxRpm : Math.max(maxTorqueRpm, localMaxRpm);
+          }
+        }
+      }
+
+      // ===== Collect additional fields =====
+      if (!fuelType) {
+        const ft = variant?.sectionData?.newVariants?.details?.specifications?.fuelType;
+        if (ft != null) {
+          const ftStr = String(ft).trim();
+          if (ftStr && ftStr.toLowerCase() !== 'n/a') {
+            fuelType = ftStr;
+          }
+        }
+      }
+
+      if (!bodyType) {
+        const bt = variant?.sectionData?.newVariants?.details?.specifications?.bodyType;
+        if (bt != null) {
+          const btStr = String(bt).trim();
+          if (btStr && btStr.toLowerCase() !== 'n/a') {
+            bodyType = btStr;
+          }
+        }
+      }
+
+      if (!seatingCapacity) {
+        const sc = variant?.sectionData?.newVariants?.details?.features?.seatingCapacity;
+        if (sc != null) {
+          const scStrRaw = String(sc).trim();
+          let scStr = scStrRaw;
+          const numMatch = scStrRaw.match(/\d+/);
+          if (numMatch) {
+            scStr = numMatch[0];
+          }
+          if (scStr && scStr.toLowerCase() !== 'n/a') {
+            seatingCapacity = scStr;
+          }
+        }
+      }
+
+      if (!mileage) {
+        const mi = variant?.sectionData?.newVariants?.details?.specifications?.mileage;
+        if (mi != null) {
+          const miStr = String(mi).trim();
+          if (miStr && miStr.toLowerCase() !== 'n/a') {
+            mileage = miStr;
+          }
+        }
+      }
+
+      // ===== Collect transmissions =====
+      const trans = variant?.sectionData?.newVariants?.details?.specifications?.transmission;
+      if (trans != null) {
+        const transStr = String(trans).trim();
+        if (transStr && transStr.toLowerCase() !== 'n/a') {
+          transmissions.add(transStr);
+        }
       }
     }
 
-    // ===== Prepare newcarData =====
-    const newcarData = {
-      mileageARAI: variant?.sectionData?.newVariants?.details?.specifications?.mileageARAI || 'N/A',
-      seatingCapacity: variant?.sectionData?.newVariants?.details?.features?.seatingCapacity || 'N/A',
-      fuelType: variant?.sectionData?.newVariants?.fuelType || 'N/A',
-      maxPower: variant?.sectionData?.newVariants?.details?.specifications?.maxPower || 'N/A', // untouched
-      maxPowerBhp: maxPowerBhpFormatted,   // new field
-      maxPowerRpm: maxPowerRpmFormatted,   // new field
-      maxTorqueNm: maxTorqueNmFormatted,   // new field
-      maxTorqueRpm: maxTorqueRpmFormatted, // new field
-      bodyType: variant?.sectionData?.newVariants?.details?.features?.bodyType || 'N/A',
-    };
+    // Format results
+    const maxPowerBhpFormatted = (minBhp !== null && maxBhp !== null)
+      ? (minBhp === maxBhp ? `${minBhp}` : `${minBhp}-${maxBhp}`)
+      : 'N/A';
 
-    // Build dot-notation update dynamically
-    const updateFields: Record<string, any> = {};
-    for (const [k, v] of Object.entries(newcarData)) {
-      updateFields[`sectionData.newModel.${k}`] = v;
-    }
-    updateFields['updatedAt'] = new Date();
+    const maxPowerRpmFormatted = (minPowerRpm !== null && maxPowerRpm !== null)
+      ? (minPowerRpm === maxPowerRpm ? `${minPowerRpm}` : `${minPowerRpm}-${maxPowerRpm}`)
+      : 'N/A';
+
+    const maxTorqueNmFormatted = (minTorqueNm !== null && maxTorqueNm !== null)
+      ? (minTorqueNm === maxTorqueNm ? `${minTorqueNm}` : `${minTorqueNm}-${maxTorqueNm}`)
+      : 'N/A';
+
+    const maxTorqueRpmFormatted = (minTorqueRpm !== null && maxTorqueRpm !== null)
+      ? (minTorqueRpm === maxTorqueRpm ? `${minTorqueRpm}` : `${minTorqueRpm}-${maxTorqueRpm}`)
+      : 'N/A';
+
+    const transmissionArray = Array.from(transmissions);
+
+    // Update 'format' collection using string _id
+    const formatId: any = mongoose.Types.ObjectId.isValid(modelId)
+      ? new mongoose.Types.ObjectId(modelId)
+      : modelId;
 
     await db.collection('format').updateOne(
-      { _id: modelId },
-      { $set: updateFields },
+      { _id: formatId },
+      {
+        $set: {
+          'sectionData.newModel.maxPowerBhp': maxPowerBhpFormatted,
+          'sectionData.newModel.maxPowerRpm': maxPowerRpmFormatted,
+          'sectionData.newModel.maxTorqueNm': maxTorqueNmFormatted,
+          'sectionData.newModel.maxTorqueRpm': maxTorqueRpmFormatted,
+          'sectionData.newModel.fuelType': fuelType ?? 'N/A',
+          'sectionData.newModel.bodyType': bodyType ?? 'N/A',
+          'sectionData.newModel.seatingCapacity': seatingCapacity ?? 'N/A',
+          'sectionData.newModel.mileage': mileage ?? 'N/A',
+          'sectionData.newModel.transmission': transmissionArray,
+          updatedAt: new Date()
+        }
+      },
+      { upsert: true }
     );
 
-    updates.push({ modelId, newcarData });
+    updates.push({
+      modelId,
+      maxPowerBhp: maxPowerBhpFormatted,
+      maxPowerRpm: maxPowerRpmFormatted,
+      maxTorqueNm: maxTorqueNmFormatted,
+      maxTorqueRpm: maxTorqueRpmFormatted,
+      fuelType: fuelType ?? 'N/A',
+      bodyType: bodyType ?? 'N/A',
+      seatingCapacity: seatingCapacity ?? 'N/A',
+      mileage: mileage ?? 'N/A',
+      transmission: transmissionArray
+    });
   }
 
   return {
@@ -208,19 +288,20 @@ if (moduleName === 'newvarinet') {
     moduleName,
     appName,
     updatedCount: updates.length,
-    updatedModels: updates,
+    updatedModels: updates
   };
 }
 
+
 await db.collection('format').updateMany(
   {
-    'sectionData.newModel.price': { 
-      $ne: null, 
-      $not: { $regex: '^N/A$', $options: 'i' } // Exclude "N/A"
+    'sectionData.newModel.price': {
+      $ne: null,
+      $not: { $regex: '^N/A$', $options: 'i' }
     }
   },
   [
-    // Step 1 – Normalize hyphens
+    // normalize hyphen
     {
       $set: {
         priceNormalized: {
@@ -232,111 +313,134 @@ await db.collection('format').updateMany(
         }
       }
     },
-    // Step 2 – Split into min and max
+    // split into minRaw / maxRaw
     {
       $set: {
         minRaw: { $arrayElemAt: [{ $split: ['$priceNormalized', '-'] }, 0] },
         maxRaw: { $arrayElemAt: [{ $split: ['$priceNormalized', '-'] }, 1] }
       }
     },
-    // Step 3 – Clean extra symbols and spaces
+    // clean ₹ and whitespace, detect unit if present on min or max
     {
       $set: {
         minClean: {
           $trim: {
-            input: {
-              $replaceAll: { input: '$minRaw', find: '₹', replacement: '' }
-            },
+            input: { $replaceAll: { input: '$minRaw', find: '₹', replacement: '' } },
             chars: ' '
           }
         },
         maxClean: {
           $trim: {
-            input: {
-              $replaceAll: { input: '$maxRaw', find: '₹', replacement: '' }
-            },
+            input: { $replaceAll: { input: '$maxRaw', find: '₹', replacement: '' } },
             chars: ' '
+          }
+        },
+        unitDetected: {
+          $cond: [
+            { $regexMatch: { input: '$minRaw', regex: /lakh/i } }, 'lakh',
+            {
+              $cond: [
+                { $regexMatch: { input: '$minRaw', regex: /crore/i } }, 'crore',
+                {
+                  $cond: [
+                    { $regexMatch: { input: '$maxRaw', regex: /lakh/i } }, 'lakh',
+                    {
+                      $cond: [
+                        { $regexMatch: { input: '$maxRaw', regex: /crore/i } }, 'crore',
+                        null
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    // compute minPrice and maxPrice as STRING of full rupee number
+    {
+      $set: {
+        'sectionData.newModel.minPrice': {
+          $let: {
+            vars: {
+              numeric: {
+                // remove possible "Lakh"/"Crore" if present and parse double
+                $toDouble: {
+                  $trim: {
+                    input: {
+                      $replaceAll: {
+                        input: { $replaceAll: { input: '$minClean', find: 'Lakh', replacement: '' } },
+                        find: 'Crore',
+                        replacement: ''
+                      }
+                    },
+                    chars: ' '
+                  }
+                }
+              },
+              multiplier: {
+                $switch: {
+                  branches: [
+                    // prefer explicit unit on minClean if present
+                    { case: { $regexMatch: { input: '$minClean', regex: /lakh/i } }, then: 100000 },
+                    { case: { $regexMatch: { input: '$minClean', regex: /crore/i } }, then: 10000000 },
+                    // else fallback to unitDetected (maybe found on max)
+                    { case: { $eq: ['$unitDetected', 'lakh'] }, then: 100000 },
+                    { case: { $eq: ['$unitDetected', 'crore'] }, then: 10000000 }
+                  ],
+                  default: 1
+                }
+              }
+            },
+            in: {
+              // multiply then toInt then toString to store "649000"
+              $toString: { $toInt: { $multiply: ['$$numeric', '$$multiplier'] } }
+            }
+          }
+        },
+
+        'sectionData.newModel.maxPrice': {
+          $let: {
+            vars: {
+              numeric: {
+                $toDouble: {
+                  $trim: {
+                    input: {
+                      $replaceAll: {
+                        input: { $replaceAll: { input: '$maxClean', find: 'Lakh', replacement: '' } },
+                        find: 'Crore',
+                        replacement: ''
+                      }
+                    },
+                    chars: ' '
+                  }
+                }
+              },
+              multiplier: {
+                $switch: {
+                  branches: [
+                    { case: { $regexMatch: { input: '$maxClean', regex: /lakh/i } }, then: 100000 },
+                    { case: { $regexMatch: { input: '$maxClean', regex: /crore/i } }, then: 10000000 },
+                    { case: { $eq: ['$unitDetected', 'lakh'] }, then: 100000 },
+                    { case: { $eq: ['$unitDetected', 'crore'] }, then: 10000000 }
+                  ],
+                  default: 1
+                }
+              }
+            },
+            in: { $toString: { $toInt: { $multiply: ['$$numeric', '$$multiplier'] } } }
           }
         }
       }
     },
-    // Step 4 – Convert min and max to numeric values
+    // cleanup temporaries
     {
-      $set: {
-        'sectionData.newModel.minPrice': {
-          $cond: [
-            { $regexMatch: { input: '$minClean', regex: /^(\d+(\.\d+)?)$/ } },
-            { $toInt: { $toDouble: '$minClean' } },
-            {
-              $cond: [
-                { $regexMatch: { input: '$minClean', regex: /lakh/i } },
-                {
-                  $toInt: {
-                    $multiply: [
-                      { $toDouble: { $trim: { input: { $replaceAll: { input: '$minClean', find: 'Lakh', replacement: '' } }, chars: ' ' } } },
-                      100000
-                    ]
-                  }
-                },
-                {
-                  $cond: [
-                    { $regexMatch: { input: '$minClean', regex: /crore/i } },
-                    {
-                      $toInt: {
-                        $multiply: [
-                          { $toDouble: { $trim: { input: { $replaceAll: { input: '$minClean', find: 'Crore', replacement: '' } }, chars: ' ' } } },
-                          10000000
-                        ]
-                      }
-                    },
-                    null
-                  ]
-                }
-              ]
-            }
-          ]
-        },
-        'sectionData.newModel.maxPrice': {
-          $cond: [
-            { $regexMatch: { input: '$maxClean', regex: /^(\d+(\.\d+)?)$/ } },
-            { $toInt: { $toDouble: '$maxClean' } },
-            {
-              $cond: [
-                { $regexMatch: { input: '$maxClean', regex: /lakh/i } },
-                {
-                  $toInt: {
-                    $multiply: [
-                      { $toDouble: { $trim: { input: { $replaceAll: { input: '$maxClean', find: 'Lakh', replacement: '' } }, chars: ' ' } } },
-                      100000
-                    ]
-                  }
-                },
-                {
-                  $cond: [
-                    { $regexMatch: { input: '$maxClean', regex: /crore/i } },
-                    {
-                      $toInt: {
-                        $multiply: [
-                          { $toDouble: { $trim: { input: { $replaceAll: { input: '$maxClean', find: 'Crore', replacement: '' } }, chars: ' ' } } },
-                          10000000
-                        ]
-                      }
-                    },
-                    null
-                  ]
-                }
-              ]
-            }
-          ]
-        }
-      }
-    },
-    // Step 5 – Remove temporary fields
-    {
-      $unset: ['priceNormalized', 'minRaw', 'maxRaw', 'minClean', 'maxClean']
+      $unset: ['priceNormalized', 'minRaw', 'maxRaw', 'minClean', 'maxClean', 'unitDetected']
     }
   ]
 );
+
 
 
     const pipeline: any[] = [];

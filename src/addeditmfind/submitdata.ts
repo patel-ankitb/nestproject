@@ -8,7 +8,7 @@ export class submitdata {
 
   // single endpoint for add/edit
   @Post('dynamic/submitdata')
-  async save(@Req() req: Request, @Body() body: any) {
+  async save(@Req() req: Request, @Body() body: any): Promise<any> {
     // 👉 payload is optional now, no error throw
     // console.log('Received payload:', body);
     if (body.docId) {

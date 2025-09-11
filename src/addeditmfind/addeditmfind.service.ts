@@ -185,17 +185,19 @@ export class AddEditMFindService {
           }
 
           if (v.matchField && v.matchValue !== undefined) {
-            if (v.removeField && (!v.addFields || !(v.removeField in v.addFields))) {
+            if (v.removeField) {
               unsetData[`${field}.$[elem].${v.removeField}`] = '';
             }
-            if (v.addFields && typeof v.addFields === 'object') {
+            if (v.addFields) {
               for (const [k, val] of Object.entries(v.addFields)) {
                 setData[`${field}.$[elem].${k}`] = val;
               }
             }
-            arrayFilters.push({ [`elem.${v.matchField}`]: v.matchValue });
+            arrayFilters.push({ ['elem.' + v.matchField]: v.matchValue });
             continue;
           }
+
+
         }
 
         if (value === null) {
@@ -214,16 +216,28 @@ export class AddEditMFindService {
       if (!Object.keys(updateOps).length) {
         throw new BadRequestException('No valid fields found to update');
       }
+const options = arrayFilters.length ? { arrayFilters } : {};
+const result = await collection.updateOne(filter, updateOps, options);
 
-      const options = arrayFilters.length ? { arrayFilters } : {};
-      const result = await collection.updateOne(filter, updateOps, options);
+
+      const lookupFilter: any = mongoose.isValidObjectId(docIdFromBody)
+        ? { _id: new mongoose.Types.ObjectId(docIdFromBody) }
+        : { _id: docIdFromBody };
+
+      if (result.matchedCount === 0) {
+        throw new BadRequestException(`Document with id '${docIdFromBody}' not found`);
+      }
+
+      const updatedDoc = await collection.findOne(lookupFilter);
 
       return {
         success: true,
         action: 'edit',
+        message: 'Document updated successfully',
         matchedCount: result.matchedCount,
         modifiedCount: result.modifiedCount,
-        updateOps,
+        upsertedId: result.upsertedId ?? null,
+        data: updatedDoc,
       };
     }
 
@@ -239,7 +253,7 @@ export class AddEditMFindService {
       else payload._id = String(payload._id);
 
       const resultAdd = await collection.insertOne(payload);
-      return { success: true, action: 'add', message: 'Document added', insertedId: resultAdd.insertedId };
+      return { success: true, action: 'add', message: 'new Add the data Successfully...!!', insertedId: resultAdd.insertedId };
     }
 
     // ===== FETCH =====
