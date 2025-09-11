@@ -216,16 +216,21 @@ if (moduleName === 'newvarinet') {
         }
       }
 
-      // ===== Collect transmissions =====
-      const trans = variant?.sectionData?.newVariants?.details?.specifications?.transmission;
-      if (trans != null) {
-        const transStr = String(trans).trim();
-        if (transStr && transStr.toLowerCase() !== 'n/a') {
-          transmissions.add(transStr);
-        }
-      }
+    // ===== Collect transmissions =====
+const trans = variant?.sectionData?.newVariants?.details?.specifications?.transmission;
+if (trans != null) {
+  const transStr = String(trans).trim();
+  if (transStr && transStr.toLowerCase() !== 'n/a') {
+    // Only allow "Manual" and "AMT"
+    const normalized = transStr.toLowerCase();
+    if (normalized.includes('manual')) {
+      transmissions.add('Manual');
+    } else if (normalized.includes('amt')) {
+      transmissions.add('AMT');
     }
-
+  }
+}
+    }
     // Format results
     const maxPowerBhpFormatted = (minBhp !== null && maxBhp !== null)
       ? (minBhp === maxBhp ? `${minBhp}` : `${minBhp}-${maxBhp}`)
@@ -254,10 +259,10 @@ if (moduleName === 'newvarinet') {
       { _id: formatId },
       {
         $set: {
-          'sectionData.newModel.maxPowerBhp': maxPowerBhpFormatted,
-          'sectionData.newModel.maxPowerRpm': maxPowerRpmFormatted,
-          'sectionData.newModel.maxTorqueNm': maxTorqueNmFormatted,
-          'sectionData.newModel.maxTorqueRpm': maxTorqueRpmFormatted,
+          'sectionData.newModel.PowerBhp': maxPowerBhpFormatted,
+          'sectionData.newModel.PowerRpm': maxPowerRpmFormatted,
+          'sectionData.newModel.TorqueNm': maxTorqueNmFormatted,
+          'sectionData.newModel.TorqueRpm': maxTorqueRpmFormatted,
           'sectionData.newModel.fuelType': fuelType ?? 'N/A',
           'sectionData.newModel.bodyType': bodyType ?? 'N/A',
           'sectionData.newModel.seatingCapacity': seatingCapacity ?? 'N/A',
@@ -271,10 +276,10 @@ if (moduleName === 'newvarinet') {
 
     updates.push({
       modelId,
-      maxPowerBhp: maxPowerBhpFormatted,
-      maxPowerRpm: maxPowerRpmFormatted,
-      maxTorqueNm: maxTorqueNmFormatted,
-      maxTorqueRpm: maxTorqueRpmFormatted,
+      PowerBhp: maxPowerBhpFormatted,
+      PowerRpm: maxPowerRpmFormatted,
+      TorqueNm: maxTorqueNmFormatted,
+      TorqueRpm: maxTorqueRpmFormatted,
       fuelType: fuelType ?? 'N/A',
       bodyType: bodyType ?? 'N/A',
       seatingCapacity: seatingCapacity ?? 'N/A',
@@ -292,7 +297,7 @@ if (moduleName === 'newvarinet') {
   };
 }
 
-
+// ====== Normalize price and convert companyId ======
 await db.collection('format').updateMany(
   {
     'sectionData.newModel.price': {
@@ -310,7 +315,9 @@ await db.collection('format').updateMany(
             find: '–',
             replacement: '-'
           }
-        }
+        },
+        // ✅ Convert companyId to string
+        companyId: { $toString: '$companyId' }
       }
     },
     // split into minRaw / maxRaw
@@ -365,7 +372,6 @@ await db.collection('format').updateMany(
           $let: {
             vars: {
               numeric: {
-                // remove possible "Lakh"/"Crore" if present and parse double
                 $toDouble: {
                   $trim: {
                     input: {
@@ -382,10 +388,8 @@ await db.collection('format').updateMany(
               multiplier: {
                 $switch: {
                   branches: [
-                    // prefer explicit unit on minClean if present
                     { case: { $regexMatch: { input: '$minClean', regex: /lakh/i } }, then: 100000 },
                     { case: { $regexMatch: { input: '$minClean', regex: /crore/i } }, then: 10000000 },
-                    // else fallback to unitDetected (maybe found on max)
                     { case: { $eq: ['$unitDetected', 'lakh'] }, then: 100000 },
                     { case: { $eq: ['$unitDetected', 'crore'] }, then: 10000000 }
                   ],
@@ -394,7 +398,6 @@ await db.collection('format').updateMany(
               }
             },
             in: {
-              // multiply then toInt then toString to store "649000"
               $toString: { $toInt: { $multiply: ['$$numeric', '$$multiplier'] } }
             }
           }
