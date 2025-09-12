@@ -135,7 +135,7 @@ export class MFindService {
       const hashedPassword = await bcrypt.hash(password, 10);
 
       const newUser = {
-        _id: new ObjectId(),
+        _id: new ObjectId().toString(),
         sectionData: {
           appuser: {
             name,
@@ -458,7 +458,7 @@ export class MFindService {
       moduleName,
       query = {},
       projection = {},
-      limit = 10,
+      limit = 0,
       skip = 0,
       order = 'ascending',
       sortBy = '_id',
