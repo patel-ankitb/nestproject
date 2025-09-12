@@ -16,7 +16,7 @@ export class PublicMFindService {
   }
 
   // 🔑 fetch dbName + allowed modules dynamically
-  private async getDbConfigFromKey(key: string): Promise<{ db: string, modules: string[] }> {
+  private async getDbConfigFromKey(key: string): Promise<{ db: string, modules: any[] }> {
     const configConnection = await this.getConnection("configdb");
     const configCollection = configConnection.collection("appconfigs");
 
@@ -37,32 +37,32 @@ export class PublicMFindService {
       moduleName,
       query = {},
       projection = {},
-      limit = 10,
+      limit = 0,
       skip = 0,
       order = "ascending",
       sortBy = "_id",
     } = body;
 
-    
-     if (!moduleName) throw new BadRequestException("moduleName is required in body");
+    if (!moduleName) throw new BadRequestException("moduleName is required in body");
+
     const key = headers['x-api-key'];
     if (!key) throw new BadRequestException("Key must be provided in headers");
-   
-  
+
     const db = await this.getDbConfigFromKey(key);
 
-    // ✅ Check if module is allowed
-    // if (!modules.includes(moduleName)) {
-    //   throw new BadRequestException(`Module '${moduleName}' not allowed for key '${key}'`);
-    // }
+    // ✅ Check if module is allowed for this key
+    const moduleAllowed = db.modules.some((mod: any) => mod.moduleName === moduleName);
+    if (!moduleAllowed) {
+      throw new BadRequestException(`Module '${moduleName}' not allowed for key '${key}'`);
+    }
 
-    const connection = await this.getConnection(db.db );
+    const connection = await this.getConnection(db.db);
 
     // ✅ Collection check
     const collections = await connection.db!.listCollections().toArray();
     const exists = collections.some(c => c.name === moduleName);
     if (!exists) {
-      throw new BadRequestException(`Collection '${moduleName}' does not exist in database '${db}'`);
+      throw new BadRequestException(`Collection '${moduleName}' does not exist in database '${db.db}'`);
     }
 
     const collection = connection.collection(moduleName);
@@ -76,15 +76,16 @@ export class PublicMFindService {
     if (limit > 0) pipeline.push({ $limit: limit });
 
     const documents = await collection.aggregate(pipeline).toArray();
-    const totalCount = await collection.countDocuments(query);
+       const totalCountdb = await collection.countDocuments({});
+       const querycount = await collection.countDocuments(query);
 
     return {
       success: true,
-      // appconfigs: db,
       moduleName,
       count: documents.length,
-      totalCount,
+      querycount,
+      totalCountdb,
       data: documents,
     };
   }
-} 
+}
