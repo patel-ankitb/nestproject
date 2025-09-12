@@ -216,8 +216,8 @@ export class AddEditMFindService {
       if (!Object.keys(updateOps).length) {
         throw new BadRequestException('No valid fields found to update');
       }
-const options = arrayFilters.length ? { arrayFilters } : {};
-const result = await collection.updateOne(filter, updateOps, options);
+      const options = arrayFilters.length ? { arrayFilters } : {};
+      const result = await collection.updateOne(filter, updateOps, options);
 
 
       const lookupFilter: any = mongoose.isValidObjectId(docIdFromBody)
@@ -240,8 +240,6 @@ const result = await collection.updateOne(filter, updateOps, options);
         data: updatedDoc,
       };
     }
-
-    // ===== ADD =====
     if (isAdd) {
       let canAdd = true;
       if (moduleConfig && typeof moduleConfig === 'object') {
@@ -249,12 +247,36 @@ const result = await collection.updateOne(filter, updateOps, options);
       }
       if (!canAdd) throw new BadRequestException(`Adding not allowed for module '${cleanModuleName}'`);
 
-      if (!payload._id) payload._id = Date.now().toString();
-      else payload._id = String(payload._id);
+      // Extract the array from body
+      const addDataArray = body.body?.cars?.add;
+      if (!Array.isArray(addDataArray) || addDataArray.length === 0) {
+        throw new BadRequestException('No data provided to add');
+      }
 
-      const resultAdd = await collection.insertOne(payload);
-      return { success: true, action: 'add', message: 'new Add the data Successfully...!!', insertedId: resultAdd.insertedId };
+      // For each item in the array, add to DB and collect results
+      const insertedDocs: any[] = [];
+      for (const item of addDataArray) {
+        // Ensure _id is present and is string
+        if (!item._id) {
+          item._id = Date.now().toString() + Math.floor(Math.random() * 1000);
+        } else {
+          item._id = String(item._id);
+        }
+
+        const resultAdd = await collection.insertOne(item);
+        const insertedDoc = await collection.findOne({ _id: item._id });
+        insertedDocs.push(insertedDoc);
+      }
+
+      return {
+        success: true,
+        action: 'add',
+        message: 'Data added successfully',
+        data: insertedDocs, // return all inserted documents
+      };
     }
+
+
 
     // ===== FETCH =====
     const pipeline: any[] = [];

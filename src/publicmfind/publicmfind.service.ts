@@ -20,15 +20,15 @@ export class PublicMFindService {
     const configConnection = await this.getConnection("configdb");
     const configCollection = configConnection.collection("appconfigs");
 
-    const config = await configCollection.findOne({ "sectiondata.appconfigs.key": key });
+    const config = await configCollection.findOne({ "sectionData.appconfigs.key": key });
 
-    if (!config || !config.sectiondata?.appconfigs?.db) {
+    if (!config || !config.sectionData?.appconfigs?.db) {
       throw new BadRequestException(`No database found for key '${key}'`);
     }
 
     return {
-      db: config.sectiondata.appconfigs.db,
-      modules: config.sectiondata.appconfigs.modules || []
+      db: config.sectionData.appconfigs.db,
+      modules: config.sectionData.appconfigs.modules || []
     };
   }
 
@@ -43,18 +43,20 @@ export class PublicMFindService {
       sortBy = "_id",
     } = body;
 
-    const key =  headers['x-api-key']; 
+    
+     if (!moduleName) throw new BadRequestException("moduleName is required in body");
+    const key = headers['x-api-key'];
     if (!key) throw new BadRequestException("Key must be provided in headers");
-    if (!moduleName) throw new BadRequestException("moduleName is required in body");
-
-    const { db, modules } = await this.getDbConfigFromKey(key);
+   
+  
+    const db = await this.getDbConfigFromKey(key);
 
     // ✅ Check if module is allowed
-    if (!modules.includes(moduleName)) {
-      throw new BadRequestException(`Module '${moduleName}' not allowed for key '${key}'`);
-    }
+    // if (!modules.includes(moduleName)) {
+    //   throw new BadRequestException(`Module '${moduleName}' not allowed for key '${key}'`);
+    // }
 
-    const connection = await this.getConnection(db);
+    const connection = await this.getConnection(db.db );
 
     // ✅ Collection check
     const collections = await connection.db!.listCollections().toArray();
@@ -78,11 +80,11 @@ export class PublicMFindService {
 
     return {
       success: true,
-      appconfigs: db,
+      // appconfigs: db,
       moduleName,
       count: documents.length,
       totalCount,
       data: documents,
     };
   }
-}
+} 
