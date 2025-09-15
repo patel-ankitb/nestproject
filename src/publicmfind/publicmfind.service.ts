@@ -6,7 +6,6 @@ export class PublicMFindService {
   private connections: Map<string, Connection> = new Map();
   private readonly BASE_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
 
-  // ===== Connection Pool =====
   private async getConnection(cn_str: string, dbName: string): Promise<Connection> {
     const cacheKey = `${cn_str}_${dbName}`;
     if (this.connections.has(cacheKey)) return this.connections.get(cacheKey)!;
@@ -15,7 +14,6 @@ export class PublicMFindService {
     return connection;
   }
 
-  // ===== Get DB config from header key =====
   private async getDbConfigFromKey(key: string) {
     const configConn = await this.getConnection(this.BASE_URI, 'configdb');
     const config = await configConn.collection('appconfigs').findOne({
@@ -30,14 +28,11 @@ export class PublicMFindService {
     };
   }
 
-  // ===== Fetch module by name =====
   private async getModuleByName(key: string, moduleName: string) {
     const configConn = await this.getConnection(this.BASE_URI, 'configdb');
-
     const config = await configConn.collection('appconfigs').findOne({
       'sectionData.appconfigs.key': key,
     });
-
     if (!config?.sectionData?.appconfigs?.modules) {
       throw new BadRequestException(`Modules not found for key '${key}'`);
     }
@@ -77,48 +72,57 @@ export class PublicMFindService {
     const key = headers['x-api-key'];
     if (!key) throw new BadRequestException("Key must be provided in headers");
 
-    // ===== DB connection =====
     const config = await this.getDbConfigFromKey(key);
     const conn = await this.getConnection(this.BASE_URI, config.db);
     const db = conn.db;
     if (!db) throw new BadRequestException('Database connection failed');
 
-    // ===== Module config =====
     const moduleConfig = await this.getModuleByName(key, moduleName);
     const cleanModuleName = moduleName.trim();
     if (!moduleConfig) throw new BadRequestException(`Module '${cleanModuleName}' not allowed`);
 
-    // ensure collection exists
     const collections = await db.listCollections().toArray();
     if (!collections.some((c: any) => c.name === cleanModuleName)) {
       await db.createCollection(cleanModuleName);
     }
     const collection = db.collection(cleanModuleName);
 
-    // ===== Apply optional query/projection/aggregation on the module document =====
-  const pipeline: any[] = [
-  { $match: { ...query } } // only filter by query if provided
-];
+    // ===== Build pipeline properly =====
+    const pipeline: any[] = [];
 
-    if (Object.keys(projection).length) pipeline.push({ $project: projection });
-    if (query && Object.keys(query).length) {
-  pipeline.push({ $match: query });
-}
+    // Apply query if provided
+    if (query && Object.keys(query).length > 0) {
+      pipeline.push({ $match: query });
+    }
 
+    // Apply projection if provided
+    if (projection && Object.keys(projection).length > 0) {
+      pipeline.push({ $project: projection });
+    }
+
+    // Apply sorting
     pipeline.push({ $sort: { [sortBy]: order === "descending" ? -1 : 1 } });
-    if (skip > 0) pipeline.push({ $skip: skip });
-    if (limit > 0) pipeline.push({ $limit: limit });
+
+    // Apply skip
+    if (skip > 0) {
+      pipeline.push({ $skip: skip });
+    }
+
+    // Apply limit
+    if (limit > 0) {
+      pipeline.push({ $limit: limit });
+    }
 
     const documents = await collection.aggregate(pipeline).toArray();
     const totalCountdb = await collection.countDocuments({});
-    const querycount = await collection.countDocuments({ 'key': moduleName, ...query });
+    const queryCount = await collection.countDocuments(query);
 
     return {
       success: true,
       appName,
       moduleName,
       count: documents.length,
-      querycount,
+      querycount: queryCount,
       totalCountdb,
       data: documents,
     };
