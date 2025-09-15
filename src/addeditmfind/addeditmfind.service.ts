@@ -265,10 +265,16 @@ if (isAdd) {
 
     for (const [key, value] of Object.entries(item)) {
       if (key === '_id') continue; // Skip _id field
+
+      // Ensure the key starts with 'sectionData.'
+      if (!key.startsWith('sectionData.')) {
+        throw new BadRequestException(`All fields must belong to 'sectionData', invalid key: ${key}`);
+      }
+
       const parts = key.split('.');
       if (parts.length > 1) {
         let current = sectionData;
-        for (let i = 0; i < parts.length; i++) {
+        for (let i = 1; i < parts.length; i++) { // start from index 1 to skip 'sectionData'
           const part = parts[i];
           if (i === parts.length - 1) {
             current[part] = value;
@@ -279,9 +285,6 @@ if (isAdd) {
             current = current[part];
           }
         }
-      } else {
-        // If not dotted, treat as a direct field inside sectionData
-        sectionData[key] = value;
       }
     }
 
@@ -304,6 +307,7 @@ if (isAdd) {
     data: insertedDocs,
   };
 }
+
 
 
 
