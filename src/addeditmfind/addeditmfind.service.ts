@@ -247,7 +247,6 @@ if (isAdd) {
   }
   if (!canAdd) throw new BadRequestException(`Adding not allowed for module '${cleanModuleName}'`);
 
-  // Normalize input -> always array
   let addDataArray: any[] = [];
   if (Array.isArray(body.body)) {
     addDataArray = body.body;
@@ -262,24 +261,33 @@ if (isAdd) {
   for (const item of addDataArray) {
     const id = item._id ? String(item._id) : Date.now().toString() + Math.floor(Math.random() * 1000);
 
-    // ✅ Convert dotted keys into nested object
-    const evaluationObj: any = {};
+    const sectionData: any = {};
 
     for (const [key, value] of Object.entries(item)) {
-      if (key.startsWith('sectionData.evaluation.')) {
-        const parts = key.split('.');
-        if (parts.length >= 3) {
-          const field = parts.slice(2).join('.');
-          evaluationObj[field] = value;
+      if (key === '_id') continue; // Skip _id field
+      const parts = key.split('.');
+      if (parts.length > 1) {
+        let current = sectionData;
+        for (let i = 0; i < parts.length; i++) {
+          const part = parts[i];
+          if (i === parts.length - 1) {
+            current[part] = value;
+          } else {
+            if (!current[part]) {
+              current[part] = {};
+            }
+            current = current[part];
+          }
         }
+      } else {
+        // If not dotted, treat as a direct field inside sectionData
+        sectionData[key] = value;
       }
     }
 
     const doc = {
       _id: id,
-      sectionData: {
-        evaluation: evaluationObj
-      },
+      sectionData: sectionData,
       createdAt: new Date()
     };
 
