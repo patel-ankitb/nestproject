@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import mongoose, { Connection } from 'mongoose';
+import mongoose, { Connection, Types } from 'mongoose';
 
 @Injectable()
 export class AddEditMFindService {
@@ -240,7 +240,7 @@ export class AddEditMFindService {
         data: updatedDoc,
       };
     }
-   if (isAdd) {
+if (isAdd) {
   let canAdd = true;
   if (moduleConfig && typeof moduleConfig === 'object') {
     canAdd = !!(moduleConfig.isadd ?? moduleConfig.canAdd ?? true);
@@ -257,18 +257,35 @@ export class AddEditMFindService {
     throw new BadRequestException('No valid data provided to add');
   }
 
-  // Insert docs
   const insertedDocs: any[] = [];
+
   for (const item of addDataArray) {
-    // Ensure _id is string
-    if (!item._id) {
-      item._id = Date.now().toString() + Math.floor(Math.random() * 1000);
-    } else {
-      item._id = String(item._id);
+    const id = item._id ? String(item._id) : Date.now().toString() + Math.floor(Math.random() * 1000);
+
+    // ✅ Convert dotted keys into nested object
+    const evaluationObj: any = {};
+
+    for (const [key, value] of Object.entries(item)) {
+      if (key.startsWith('sectionData.evaluation.')) {
+        const parts = key.split('.');
+        if (parts.length >= 3) {
+          const field = parts.slice(2).join('.');
+          evaluationObj[field] = value;
+        }
+      }
     }
 
-    await collection.insertOne(item);
-    const insertedDoc = await collection.findOne({ _id: item._id });
+    const doc = {
+      _id: id,
+      sectionData: {
+        evaluation: evaluationObj
+      },
+      createdAt: new Date()
+    };
+
+    await collection.insertOne(doc as any);
+
+    const insertedDoc = await collection.findOne({ _id: id } as any);
     insertedDocs.push(insertedDoc);
   }
 
@@ -279,6 +296,11 @@ export class AddEditMFindService {
     data: insertedDocs,
   };
 }
+
+
+
+
+
 
 
 
