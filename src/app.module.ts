@@ -6,6 +6,7 @@ import { publicmfindmodule } from './publicmfind/publicmfindmodule';
 import { addeditmfindmodule } from './addeditmfind/addeditmfindmodule';
 import { format } from 'path';
 import { formatmodule } from './format/format.module';
+import { EvaluationModule } from './evaluation/evaluation.module';
 
 
 @Module({
@@ -15,7 +16,8 @@ import { formatmodule } from './format/format.module';
     MFindModule,
     publicmfindmodule,
     addeditmfindmodule,
-    formatmodule
+    formatmodule,
+     EvaluationModule,
 
   ],
   // controllers: [FormatcontrollerController],

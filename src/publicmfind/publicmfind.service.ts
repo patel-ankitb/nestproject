@@ -1,58 +1,9 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import mongoose, { Connection } from 'mongoose';
+import { DatabaseService } from '../databases/database.service'; // import service
 
 @Injectable()
 export class PublicMFindService {
-  private connections: Map<string, Connection> = new Map();
-  private readonly BASE_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
-
-  private async getConnection(cn_str: string, dbName: string): Promise<Connection> {
-    const cacheKey = `${cn_str}_${dbName}`;
-    if (this.connections.has(cacheKey)) return this.connections.get(cacheKey)!;
-    const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
-    this.connections.set(cacheKey, connection);
-    return connection;
-  }
-
-  private async getDbConfigFromKey(key: string) {
-    const configConn = await this.getConnection(this.BASE_URI, 'configdb');
-    const config = await configConn.collection('appconfigs').findOne({
-      'sectionData.appconfigs.key': key,
-    });
-    if (!config?.sectionData?.appconfigs?.db) {
-      throw new BadRequestException(`No database found for key '${key}'`);
-    }
-    return {
-      db: config.sectionData.appconfigs.db,
-      modules: config.sectionData.appconfigs.modules || [],
-    };
-  }
-
-  private async getModuleByName(key: string, moduleName: string) {
-    const configConn = await this.getConnection(this.BASE_URI, 'configdb');
-    const config = await configConn.collection('appconfigs').findOne({
-      'sectionData.appconfigs.key': key,
-    });
-    if (!config?.sectionData?.appconfigs?.modules) {
-      throw new BadRequestException(`Modules not found for key '${key}'`);
-    }
-
-    const cleanModuleName = moduleName.trim();
-    const moduleObj = config.sectionData.appconfigs.modules.find((m: any) => {
-      if (typeof m === 'string') return m.trim() === cleanModuleName;
-      if (m && typeof m === 'object') {
-        const names = [m.moduleName, m.name, m.module].filter(Boolean).map((n: string) => n.trim());
-        return names.includes(cleanModuleName);
-      }
-      return false;
-    });
-
-    if (!moduleObj) {
-      throw new BadRequestException(`Module '${cleanModuleName}' not found for key '${key}'`);
-    }
-
-    return moduleObj;
-  }
+  constructor(private readonly dbService: DatabaseService) {}
 
   async getModuleData(headers: any, body: any) {
     const {
@@ -64,6 +15,7 @@ export class PublicMFindService {
       skip = 0,
       order = "ascending",
       sortBy = "_id",
+      lookups = [],   // <-- add lookups support
     } = body;
 
     if (!appName) throw new BadRequestException("appName is required in body");
@@ -72,12 +24,15 @@ export class PublicMFindService {
     const key = headers['x-api-key'];
     if (!key) throw new BadRequestException("Key must be provided in headers");
 
-    const config = await this.getDbConfigFromKey(key);
-    const conn = await this.getConnection(this.BASE_URI, config.db);
+    const config = await this.dbService.getDbConfigFromKey(key);
+    const conn = await this.dbService.getConnection(
+      process.env.MONGO_URI || "mongodb://127.0.0.1:27017",
+      config.db
+    );
     const db = conn.db;
     if (!db) throw new BadRequestException('Database connection failed');
 
-    const moduleConfig = await this.getModuleByName(key, moduleName);
+    const moduleConfig = await this.dbService.getModuleByName(key, moduleName);
     const cleanModuleName = moduleName.trim();
     if (!moduleConfig) throw new BadRequestException(`Module '${cleanModuleName}' not allowed`);
 
@@ -90,25 +45,47 @@ export class PublicMFindService {
     // ===== Build pipeline properly =====
     const pipeline: any[] = [];
 
-    // Apply query if provided
     if (query && Object.keys(query).length > 0) {
       pipeline.push({ $match: query });
     }
 
-    // Apply projection if provided
+    // ✅ Add lookups dynamically
+    if (lookups && Array.isArray(lookups)) {
+      for (const lookup of lookups) {
+        if (!lookup.from || !lookup.localField || !lookup.foreignField || !lookup.as) {
+          throw new BadRequestException("Each lookup must contain from, localField, foreignField, and as");
+        }
+        pipeline.push({
+          $lookup: {
+            from: lookup.from,
+            localField: lookup.localField,
+            foreignField: lookup.foreignField,
+            as: lookup.as,
+          },
+        });
+
+        // optional $unwind support
+        if (lookup.unwind) {
+          pipeline.push({
+            $unwind: {
+              path: `$${lookup.as}`,
+              preserveNullAndEmptyArrays: lookup.preserveNullAndEmptyArrays ?? true,
+            },
+          });
+        }
+      }
+    }
+
     if (projection && Object.keys(projection).length > 0) {
       pipeline.push({ $project: projection });
     }
 
-    // Apply sorting
     pipeline.push({ $sort: { [sortBy]: order === "descending" ? -1 : 1 } });
 
-    // Apply skip
     if (skip > 0) {
       pipeline.push({ $skip: skip });
     }
 
-    // Apply limit
     if (limit > 0) {
       pipeline.push({ $limit: limit });
     }

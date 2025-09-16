@@ -6,13 +6,13 @@ import type { Request } from 'express';
 export class PublicMFindController {
   constructor(private readonly mfindService: PublicMFindService) {}
 
-  @Post('dynamic/getdata/public')
-  async fetchModuleData(@Req() req: Request, @Body() body: any) {
-    const key = req.headers['x-api-key'];
-    if (!key) throw new BadRequestException("Key is required in headers");
-    if (!body.moduleName) throw new BadRequestException("moduleName is required in body");
+ @Post('dynamic/getdata/public')
+async fetchModuleData(@Req() req: Request, @Body() body: any) {
+  const key = req.headers['x-api-key'];
+  if (!key) throw new BadRequestException("Key is required in headers");
+  if (!body.moduleName) throw new BadRequestException("moduleName is required in body");
 
-    // Pass merged headers (normalize key)
-    return this.mfindService.getModuleData({ ...req.headers, key }, body);
-  }
+  return this.mfindService.getModuleData(req.headers, body);
+}
+
 }
