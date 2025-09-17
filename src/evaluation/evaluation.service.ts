@@ -7,7 +7,6 @@ export class EvaluationService {
   private readonly BASE_URI =
     process.env.MONGO_URI || 'mongodb://127.0.0.1:27017';
 
-  // ===== Connection Pool =====
   private async getConnection(cn_str: string, dbName: string): Promise<Connection> {
     const cacheKey = `${cn_str}_${dbName}`;
     if (this.connections.has(cacheKey)) return this.connections.get(cacheKey)!;
@@ -32,144 +31,78 @@ export class EvaluationService {
     };
   }
 
-  private async getModuleByName(key: string, moduleName: string) {
-    const configConn = await this.getConnection(this.BASE_URI, 'configdb');
-    const config = await configConn.collection('appconfigs').findOne({
-      'sectionData.appconfigs.key': key,
-    });
-
-    if (!config?.sectionData?.appconfigs?.modules) {
-      throw new BadRequestException(`Modules not found for key '${key}'`);
-    }
-
-    const cleanModuleName = moduleName.trim();
-    const moduleObj = config.sectionData.appconfigs.modules.find((m: any) => {
-      if (typeof m === 'string') return m.trim() === cleanModuleName;
-      if (m && typeof m === 'object') {
-        const names = [m.moduleName, m.name, m.module]
-          .filter(Boolean)
-          .map((n: string) => n.trim());
-        return names.includes(cleanModuleName);
-      }
-      return false;
-    });
-
-    if (!moduleObj) {
-      throw new BadRequestException(
-        `Module '${cleanModuleName}' not found for key '${key}'`,
-      );
-    }
-
-    return moduleObj;
-  }
-
-  // ===== Main Logic =====
-  async getFieldStatisticsAndSave(key: string, appName: string, moduleName: string) {
-    // Get database name
+  async getFieldStatisticsForAllFields(
+    key: string,
+    appName: string,
+    moduleName: string,
+    evaluationId: string,
+  ) {
     const { db } = await this.getDbConfigFromKey(key);
-
-    // Get module config
-    const moduleObj = await this.getModuleByName(key, moduleName);
-    console.log('Fetched moduleObj:', moduleObj);
-
-    if (!moduleObj) {
-      throw new BadRequestException(`Module '${moduleName}' not found`);
-    }
-
-    console.log(
-      'Module Object:',
-      moduleObj,
-      moduleObj.sectionData,
-      moduleObj.data,
-      moduleObj.config,
-    );
-
-    // Extract sectionData
-    const sectionData =
-      moduleObj.sectionData ||
-      moduleObj.data?.sectionData ||
-      moduleObj.config?.sectionData ||
-      {};
-
-    if (!sectionData || Object.keys(sectionData).length === 0) {
-      throw new BadRequestException(
-        `Module '${moduleName}' has no sectionData`,
-      );
-    }
-
-    // Find evaluation section
-    const evalSectionKey = Object.keys(sectionData).find(
-      (k) => sectionData[k]?.field,
-    );
-    if (!evalSectionKey) {
-      throw new BadRequestException(
-        `Module '${moduleName}' does not have evaluation configuration`,
-      );
-    }
-
-    const evalConfig = sectionData[evalSectionKey];
-    const fieldName = evalConfig.field;
-    const options = evalConfig.name || [];
-
-    if (!fieldName) {
-      throw new BadRequestException(
-        `Invalid evaluation configuration in module '${moduleName}'`,
-      );
-    }
-
-    const sectionKey = evalSectionKey.toLowerCase();
-
-    // Connect to target DB
     const connection = await this.getConnection(this.BASE_URI, db);
 
-    // Aggregation pipeline
-    const pipeline = [
-      {
-        $match: {
-          [`sectionData.${sectionKey}.${fieldName}`]: {
-            $exists: true,
-            $ne: null,
-          },
-        },
-      },
-      {
-        $group: {
-          _id: `$sectionData.${sectionKey}.${fieldName}`,
-          count: { $sum: 1 },
-        },
-      },
-    ];
-
-    const result = await connection
-      .collection('evaluation')
-      .aggregate(pipeline)
+    const evaluationDocs = await connection
+      .collection<{ _id: string; sectionData: any }>('evaluation')
+      .find({}, { projection: { _id: 1, sectionData: 1 } })
       .toArray();
 
-    const total = result.reduce((acc, curr) => acc + curr.count, 0);
+    if (!evaluationDocs || evaluationDocs.length === 0) {
+      throw new BadRequestException(`No evaluation records found in db '${db}'`);
+    }
 
-    const formattedResult = options.map((opt: any) => {
-      const match = result.find((r) => r._id === opt.option);
-      const count = match ? match.count : 0;
-      const percent =
-        total > 0 ? ((count / total) * 100).toFixed(2) : '0.00';
-      return {
-        option: opt.option,
-        count,
-        percentage: percent + '%',
-      };
-    });
+    const sectionFilledCounts: Record<string, number> = {};
+    const sectionTotalCounts: Record<string, number> = {};
 
-    const statsDoc = {
+    for (const doc of evaluationDocs) {
+      const sectionData = doc.sectionData;
+      if (!sectionData || typeof sectionData !== 'object') continue;
+
+      for (const sectionKey of Object.keys(sectionData)) {
+        const obj = sectionData[sectionKey];
+        if (!obj || typeof obj !== 'object') continue;
+
+        if (!sectionFilledCounts[sectionKey]) sectionFilledCounts[sectionKey] = 0;
+        if (!sectionTotalCounts[sectionKey]) sectionTotalCounts[sectionKey] = 0;
+
+        for (const field in obj) {
+          sectionTotalCounts[sectionKey] += 1;
+
+          const value = obj[field];
+          const isFilled =
+            value !== null &&
+            value !== '' &&
+            value !== undefined &&
+            (!(Array.isArray(value)) || value.length > 0);
+
+          if (isFilled) {
+            sectionFilledCounts[sectionKey] += 1;
+          }
+        }
+      }
+    }
+
+    const sectionPercentages: { name: string; percentage: number }[] = [];
+
+    for (const sectionKey of Object.keys(sectionTotalCounts)) {
+      // Skip unwanted sections
+      if (["evaluation", "rating parts"].includes(sectionKey)) continue;
+
+      const total = sectionTotalCounts[sectionKey];
+      const filled = sectionFilledCounts[sectionKey] || 0;
+      const percentage = total > 0 ? parseFloat(((filled / total) * 100).toFixed(2)) : 0;
+
+      sectionPercentages.push({
+        name: sectionKey,
+        percentage,
+      });
+    }
+
+    return {
       moduleName,
-      section: sectionKey,
-      field: fieldName,
-      total,
-      results: formattedResult,
+      evaluationId,
+      sectionPercentages,
       createdAt: new Date(),
     };
 
-    await connection.collection('evaluationstats').insertOne(statsDoc);
 
-    return statsDoc;
   }
 }

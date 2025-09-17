@@ -6,13 +6,20 @@ import type { Request } from 'express';
 export class EvaluationController {
   constructor(private readonly evaluationService: EvaluationService) {}
 
-  @Post('evaluation')
+  @Post('evaluation/percentage')
   async fetchModuleData(@Req() req: Request, @Body() body: any) {
     const key = req.headers['x-api-key'];
     if (!key) throw new BadRequestException("API key is required in headers");
     if (!body.appName) throw new BadRequestException("appName is required in body");
     if (!body.moduleName) throw new BadRequestException("moduleName is required in body");
+    if (!body.evaluationId) throw new BadRequestException("evaluationId is required in body");
 
-    return this.evaluationService.getFieldStatisticsAndSave(key as string, body.appName, body.moduleName);
+    return this.evaluationService.getFieldStatisticsForAllFields(
+
+      key as string,
+      body.appName,
+      body.moduleName,
+      body.evaluationId,
+    );
   }
 }
