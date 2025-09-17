@@ -5,18 +5,21 @@ import mongoose, { Connection } from 'mongoose';
 export class DatabaseService {
   private connections: Map<string, Connection> = new Map();
   private readonly BASE_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
+  private readonly CONFIG_DB = "configdb";
+  private readonly CONFIG_COLLECTION = process.env.COLLECTION || "appconfigs";
 
   async getConnection(cn_str: string, dbName: string): Promise<Connection> {
     const cacheKey = `${cn_str}_${dbName}`;
     if (this.connections.has(cacheKey)) return this.connections.get(cacheKey)!;
+
     const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
     this.connections.set(cacheKey, connection);
     return connection;
   }
 
   async getDbConfigFromKey(key: string) {
-    const configConn = await this.getConnection(this.BASE_URI, 'configdb');
-    const config = await configConn.collection('appconfigs').findOne({
+    const configConn = await this.getConnection(this.BASE_URI, this.CONFIG_DB);
+    const config = await configConn.collection(this.CONFIG_COLLECTION).findOne({
       'sectionData.appconfigs.key': key,
     });
 
@@ -31,8 +34,8 @@ export class DatabaseService {
   }
 
   async getModuleByName(key: string, moduleName: string) {
-    const configConn = await this.getConnection(this.BASE_URI, 'configdb');
-    const config = await configConn.collection('appconfigs').findOne({
+    const configConn = await this.getConnection(this.BASE_URI, this.CONFIG_DB);
+    const config = await configConn.collection(this.CONFIG_COLLECTION).findOne({
       'sectionData.appconfigs.key': key,
     });
 
@@ -57,30 +60,3 @@ export class DatabaseService {
     return moduleObj;
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
