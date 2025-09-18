@@ -1,35 +1,10 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import mongoose, { Connection, Types } from 'mongoose';
+import mongoose from 'mongoose';
+import { DatabaseService } from '../databases/database.service';
 
 @Injectable()
 export class AddEditMFindService {
-  private connections: Map<string, Connection> = new Map();
-  private readonly BASE_URI =
-    process.env.MONGO_URI || 'mongodb://127.0.0.1:27017';
-
-  // ===== Connection Pool =====
-  private async getConnection(cn_str: string, dbName: string): Promise<Connection> {
-    const cacheKey = `${cn_str}_${dbName}`;
-    if (this.connections.has(cacheKey)) return this.connections.get(cacheKey)!;
-    const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
-    this.connections.set(cacheKey, connection);
-    return connection;
-  }
-
-  // ===== Get DB config from header key =====
-  private async getDbConfigFromKey(key: string) {
-    const configConn = await this.getConnection(this.BASE_URI, 'configdb');
-    const config = await configConn.collection('appconfigs').findOne({
-      'sectionData.appconfigs.key': key,
-    });
-    if (!config?.sectionData?.appconfigs?.db) {
-      throw new BadRequestException(`No database found for key '${key}'`);
-    }
-    return {
-      db: config.sectionData.appconfigs.db,
-      modules: config.sectionData.appconfigs.modules || [],
-    };
-  }
+  constructor(private readonly dbService: DatabaseService) {}
 
   // ===== Flatten helper =====
   private flattenObject(obj: any, parentKey = '', res: any = {}) {
@@ -48,56 +23,9 @@ export class AddEditMFindService {
       } else {
         res[newKey] = value;
       }
+
     }
     return res;
-  }
-
-  // ===== Fetch modules by docId =====
-  private async getModuleByName(docId: string, moduleName: string) {
-    const configConn = await this.getConnection(this.BASE_URI, 'configdb');
-    console.log('Fetching module by name:', { docId, moduleName });
-
-    const filter: any = mongoose.isValidObjectId(docId)
-      ? { _id: new mongoose.Types.ObjectId(docId) }
-      : { _id: docId };
-
-    let config: any = await configConn.collection('appconfigs').findOne(filter);
-    if (!config) {
-      const cleanModuleName = moduleName?.trim();
-      if (cleanModuleName) {
-        const altFilter = {
-          $or: [
-            { 'sectionData.appconfigs.modules': cleanModuleName },
-            { 'sectionData.appconfigs.modules.moduleName': cleanModuleName },
-            { 'sectionData.appconfigs.modules.name': cleanModuleName },
-            { 'sectionData.appconfigs.modules.module': cleanModuleName },
-          ],
-        };
-        const altConfig = await configConn.collection('appconfigs').findOne(altFilter);
-        if (altConfig) config = altConfig;
-      }
-    }
-
-    console.log('Config fetched for getModuleByName:', config);
-    if (!config?.sectionData?.appconfigs?.modules) {
-      throw new BadRequestException(`Modules not found for docId '${docId}'`);
-    }
-
-    const cleanModuleName = moduleName.trim();
-    const moduleObj = config.sectionData.appconfigs.modules.find((m: any) => {
-      if (typeof m === 'string') return m.trim() === cleanModuleName;
-      if (m && typeof m === 'object') {
-        const names = [m.moduleName, m.name, m.module].filter(Boolean).map((n: string) => n.trim());
-        return names.includes(cleanModuleName);
-      }
-      return false;
-    });
-
-    if (!moduleObj) {
-      throw new BadRequestException(`Module '${cleanModuleName}' not found in docId '${docId}'`);
-    }
-
-    return moduleObj;
   }
 
   // ===== Main Entry =====
@@ -124,16 +52,15 @@ export class AddEditMFindService {
     const key = headers['x-api-key'];
     if (!key) throw new BadRequestException('x-api-key header is required');
 
-    // ===== DB connection =====
-    const config = await this.getDbConfigFromKey(key);
-    const conn = await this.getConnection(this.BASE_URI, config.db);
+    // ===== DB + Module config from DatabaseService =====
+    const config = await this.dbService.getDbConfigFromKey(key);
+    const conn = await this.dbService.getConnection(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017', config.db);
     const db = conn.db;
+
     if (!db) throw new BadRequestException('Database connection failed');
 
-    // ===== Module config =====
-    const moduleConfig = await this.getModuleByName(docId, moduleName);
+    const moduleConfig = await this.dbService.getModuleByName(key, moduleName);
     const cleanModuleName = moduleName.trim();
-    if (!moduleConfig) throw new BadRequestException(`Module '${cleanModuleName}' not allowed`);
 
     // ensure collection exists
     const collections = await db.listCollections().toArray();
@@ -144,7 +71,6 @@ export class AddEditMFindService {
 
     // 🟢 EDIT flow
     if (isEdit || body.docId) {
-      console.log('Edit operation initiated', docId, body);
       const docIdFromBody = String(body.docId || '');
       if (!docIdFromBody) {
         throw new BadRequestException('docId is required for edit operation');
@@ -196,8 +122,6 @@ export class AddEditMFindService {
             arrayFilters.push({ ['elem.' + v.matchField]: v.matchValue });
             continue;
           }
-
-
         }
 
         if (value === null) {
@@ -219,7 +143,6 @@ export class AddEditMFindService {
       const options = arrayFilters.length ? { arrayFilters } : {};
       const result = await collection.updateOne(filter, updateOps, options);
 
-
       const lookupFilter: any = mongoose.isValidObjectId(docIdFromBody)
         ? { _id: new mongoose.Types.ObjectId(docIdFromBody) }
         : { _id: docIdFromBody };
@@ -240,6 +163,8 @@ export class AddEditMFindService {
         data: updatedDoc,
       };
     }
+
+   // 🟢 ADD flow
 if (isAdd) {
   let canAdd = true;
   if (moduleConfig && typeof moduleConfig === 'object') {
@@ -263,10 +188,15 @@ if (isAdd) {
 
     const sectionData: any = {};
 
-    for (const [key, value] of Object.entries(item)) {
-      if (key === '_id') continue; // Skip _id field
+    // ✅ support nested `sectionData` object directly
+    if (item.sectionData && typeof item.sectionData === 'object') {
+      Object.assign(sectionData, item.sectionData);
+    }
 
-      // Ensure the key starts with 'sectionData.'
+    // ✅ support dot-path keys like "sectionData.xxx.yyy"
+    for (const [key, value] of Object.entries(item)) {
+      if (key === '_id' || key === 'sectionData') continue;
+
       if (!key.startsWith('sectionData.')) {
         throw new BadRequestException(`All fields must belong to 'sectionData', invalid key: ${key}`);
       }
@@ -274,7 +204,7 @@ if (isAdd) {
       const parts = key.split('.');
       if (parts.length > 1) {
         let current = sectionData;
-        for (let i = 1; i < parts.length; i++) { // start from index 1 to skip 'sectionData'
+        for (let i = 1; i < parts.length; i++) {
           const part = parts[i];
           if (i === parts.length - 1) {
             current[part] = value;
@@ -291,11 +221,10 @@ if (isAdd) {
     const doc = {
       _id: id,
       sectionData: sectionData,
-      createdAt: new Date()
+      createdAt: new Date(),
     };
 
     await collection.insertOne(doc as any);
-
     const insertedDoc = await collection.findOne({ _id: id } as any);
     insertedDocs.push(insertedDoc);
   }
@@ -309,15 +238,7 @@ if (isAdd) {
 }
 
 
-
-
-
-
-
-
-
-
-    // ===== FETCH =====
+    // 🟢 FETCH flow
     const pipeline: any[] = [];
     if (Object.keys(query).length) pipeline.push({ $match: query });
     if (Object.keys(projection).length) pipeline.push({ $project: projection });
