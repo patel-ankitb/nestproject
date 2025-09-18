@@ -1,35 +1,9 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
-import mongoose, { Connection } from 'mongoose';
+import { DatabaseService } from '../databases/database.service';
 
 @Injectable()
 export class EvaluationService {
-  private connections: Map<string, Connection> = new Map();
-  private readonly BASE_URI =
-    process.env.MONGO_URI || 'mongodb://127.0.0.1:27017';
-
-  private async getConnection(cn_str: string, dbName: string): Promise<Connection> {
-    const cacheKey = `${cn_str}_${dbName}`;
-    if (this.connections.has(cacheKey)) return this.connections.get(cacheKey)!;
-    const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
-    this.connections.set(cacheKey, connection);
-    return connection;
-  }
-
-  private async getDbConfigFromKey(key: string) {
-    const configConn = await this.getConnection(this.BASE_URI, 'configdb');
-    const config = await configConn.collection('appconfigs').findOne({
-      'sectionData.appconfigs.key': key,
-    });
-
-    if (!config?.sectionData?.appconfigs?.db) {
-      throw new BadRequestException(`No database found for key '${key}'`);
-    }
-
-    return {
-      db: config.sectionData.appconfigs.db,
-      modules: config.sectionData.appconfigs.modules || [],
-    };
-  }
+  constructor(private readonly dbService: DatabaseService) {}
 
   async getFieldStatisticsForAllFields(
     key: string,
@@ -37,8 +11,11 @@ export class EvaluationService {
     moduleName: string,
     evaluationId: string,
   ) {
-    const { db } = await this.getDbConfigFromKey(key);
-    const connection = await this.getConnection(this.BASE_URI, db);
+    const { db } = await this.dbService.getDbConfigFromKey(key);
+    const connection = await this.dbService.getConnection(
+      process.env.MONGO_URI || 'mongodb://127.0.0.1:27017',
+      db,
+    );
 
     const evaluationDocs = await connection
       .collection<{ _id: string; sectionData: any }>('evaluation')
@@ -84,11 +61,14 @@ export class EvaluationService {
 
     for (const sectionKey of Object.keys(sectionTotalCounts)) {
       // Skip unwanted sections
-      if (["evaluation", "rating parts"].includes(sectionKey)) continue;
+      if (['evaluation', 'rating parts'].includes(sectionKey)) continue;
 
       const total = sectionTotalCounts[sectionKey];
       const filled = sectionFilledCounts[sectionKey] || 0;
-      const percentage = total > 0 ? parseFloat(((filled / total) * 100).toFixed(2)) : 0;
+      const percentage =
+        total > 0
+          ? parseFloat(((filled / total) * 100).toFixed(2))
+          : 0;
 
       sectionPercentages.push({
         name: sectionKey,
@@ -102,7 +82,5 @@ export class EvaluationService {
       sectionPercentages,
       createdAt: new Date(),
     };
-
-
   }
 }
