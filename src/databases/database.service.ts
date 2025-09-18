@@ -5,8 +5,7 @@ import mongoose, { Connection } from 'mongoose';
 export class DatabaseService {
   private connections: Map<string, Connection> = new Map();
   private readonly BASE_URI = process.env.MONGO_URI || "mongodb://127.0.0.1:27017";
-  private readonly CONFIG_DB = "configdb";
-  private readonly CONFIG_COLLECTION = process.env.COLLECTION || "appconfigs";
+  private readonly CONFIG_DB = process.env.CONFIG_DB || "configdb"; // <-- now from env
 
   async getConnection(cn_str: string, dbName: string): Promise<Connection> {
     const cacheKey = `${cn_str}_${dbName}`;
@@ -19,13 +18,15 @@ export class DatabaseService {
 
   async getDbConfigFromKey(key: string) {
     const configConn = await this.getConnection(this.BASE_URI, this.CONFIG_DB);
-    const config = await configConn.collection(this.CONFIG_COLLECTION).findOne({
+    const config = await configConn.collection("appconfigs").findOne({
       'sectionData.appconfigs.key': key,
     });
 
     if (!config?.sectionData?.appconfigs?.db) {
       throw new BadRequestException(`No database found for key '${key}'`);
     }
+
+    console.log("config0.............", config);
 
     return {
       db: config.sectionData.appconfigs.db,
@@ -35,7 +36,7 @@ export class DatabaseService {
 
   async getModuleByName(key: string, moduleName: string) {
     const configConn = await this.getConnection(this.BASE_URI, this.CONFIG_DB);
-    const config = await configConn.collection(this.CONFIG_COLLECTION).findOne({
+    const config = await configConn.collection("appconfigs").findOne({
       'sectionData.appconfigs.key': key,
     });
 
