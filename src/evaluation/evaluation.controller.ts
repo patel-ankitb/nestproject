@@ -14,7 +14,7 @@ export class EvaluationController {
     if (!body.moduleName) throw new BadRequestException("moduleName is required in body");
     if (!body.evaluationId) throw new BadRequestException("evaluationId is required in body");
 
-    return this.evaluationService.getFieldStatisticsForAllFields(
+    return this.evaluationService.getFieldStatisticsForEvaluation(
 
       key as string,
       body.appName,

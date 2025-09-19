@@ -5,7 +5,7 @@ import { DatabaseService } from '../databases/database.service';
 export class EvaluationService {
   constructor(private readonly dbService: DatabaseService) {}
 
-  async getFieldStatisticsForAllFields(
+  async getFieldStatisticsForEvaluation(
     key: string,
     appName: string,
     moduleName: string,
@@ -17,64 +17,76 @@ export class EvaluationService {
       db,
     );
 
-    const evaluationDocs = await connection
+    // 1. Get evaluation document by ID
+    const evaluationDoc = await connection
       .collection<{ _id: string; sectionData: any }>('evaluation')
-      .find({}, { projection: { _id: 1, sectionData: 1 } })
-      .toArray();
+      .findOne({ _id: evaluationId }, { projection: { _id: 1, sectionData: 1 } });
 
-    if (!evaluationDocs || evaluationDocs.length === 0) {
-      throw new BadRequestException(`No evaluation records found in db '${db}'`);
+    if (!evaluationDoc) {
+      throw new BadRequestException(
+        `Evaluation not found with id '${evaluationId}' in db '${db}'`,
+      );
     }
+
+    // 2. Get master field definitions
+    const masterDocs = await connection
+      .collection('evaluationmaster')
+      .find({}, { projection: { sectionData: 1 } })
+      .toArray();
 
     const sectionFilledCounts: Record<string, number> = {};
     const sectionTotalCounts: Record<string, number> = {};
 
-    for (const doc of evaluationDocs) {
-      const sectionData = doc.sectionData;
-      if (!sectionData || typeof sectionData !== 'object') continue;
+    // 3. Loop over master definitions
+    for (const masterDoc of masterDocs) {
+      const evalField = masterDoc.sectionData?.Evaluation;
+      if (!evalField) continue;
 
-      for (const sectionKey of Object.keys(sectionData)) {
-        const obj = sectionData[sectionKey];
-        if (!obj || typeof obj !== 'object') continue;
+      const sectionName = evalField.mainlabel?.trim();
+      const fieldKey = evalField.field?.trim();
+      if (!sectionName || !fieldKey) continue;
 
-        if (!sectionFilledCounts[sectionKey]) sectionFilledCounts[sectionKey] = 0;
-        if (!sectionTotalCounts[sectionKey]) sectionTotalCounts[sectionKey] = 0;
+      // init counters
+      if (!sectionTotalCounts[sectionName]) sectionTotalCounts[sectionName] = 0;
+      if (!sectionFilledCounts[sectionName]) sectionFilledCounts[sectionName] = 0;
 
-        for (const field in obj) {
-          sectionTotalCounts[sectionKey] += 1;
+      sectionTotalCounts[sectionName]++;
 
-          const value = obj[field];
-          const isFilled =
-            value !== null &&
-            value !== '' &&
-            value !== undefined &&
-            (!(Array.isArray(value)) || value.length > 0);
+      // === Case-insensitive matching ===
+      const sectionObj =
+        evaluationDoc.sectionData?.[sectionName] ??
+        evaluationDoc.sectionData?.[sectionName.toLowerCase()] ??
+        evaluationDoc.sectionData?.[sectionName.toUpperCase()];
 
-          if (isFilled) {
-            sectionFilledCounts[sectionKey] += 1;
-          }
-        }
+      const value =
+        sectionObj?.[fieldKey] ??
+        sectionObj?.[fieldKey.toLowerCase()] ??
+        sectionObj?.[fieldKey.toUpperCase()];
+
+      // === Filled check ===
+      const isFilled =
+        value !== null &&
+        value !== undefined &&
+        !(typeof value === 'string' && value.trim() === '') &&
+        (!(Array.isArray(value)) || value.length > 0) &&
+        (typeof value !== 'object' || Object.keys(value || {}).length > 0);
+
+      if (isFilled) {
+        sectionFilledCounts[sectionName]++;
       }
+
+      // Debug log (optional)
+      // console.log({ sectionName, fieldKey, value, isFilled });
     }
 
-    const sectionPercentages: { name: string; percentage: number }[] = [];
+    // 4. Calculate percentages
+    const sectionPercentages = Object.keys(sectionTotalCounts).map((sectionName) => {
+      const total = sectionTotalCounts[sectionName];
+      const filled = sectionFilledCounts[sectionName] || 0;
+      const percentage = total > 0 ? parseFloat(((filled / total) * 100).toFixed(2)) : 0;
 
-    for (const sectionKey of Object.keys(sectionTotalCounts)) {
-      // Skip unwanted sections
-      if (['evaluation', 'rating parts'].includes(sectionKey)) continue;
-
-      const total = sectionTotalCounts[sectionKey];
-      const filled = sectionFilledCounts[sectionKey] || 0;
-      const percentage =
-        total > 0
-          ? parseFloat(((filled / total) * 100).toFixed(2))
-          : 0;
-
-      sectionPercentages.push({
-        name: sectionKey,
-        percentage,
-      });
-    }
+      return { name: sectionName, percentage };
+    });
 
     return {
       moduleName,
