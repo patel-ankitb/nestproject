@@ -164,7 +164,7 @@ export class AddEditMFindService {
       };
     }
 
-   // 🟢 ADD flow
+// 🟢 ADD flow
 if (isAdd) {
   let canAdd = true;
   if (moduleConfig && typeof moduleConfig === 'object') {
@@ -184,9 +184,11 @@ if (isAdd) {
   const insertedDocs: any[] = [];
 
   for (const item of addDataArray) {
-    const id = item._id ? String(item._id) : Date.now().toString() + Math.floor(Math.random() * 1000);
+    const id =
+      item._id ? String(item._id) : Date.now().toString() + Math.floor(Math.random() * 1000);
 
     const sectionData: any = {};
+    const extraFields: any = {}; // ✅ to hold root-level fields like companyId
 
     // ✅ support nested `sectionData` object directly
     if (item.sectionData && typeof item.sectionData === 'object') {
@@ -197,12 +199,8 @@ if (isAdd) {
     for (const [key, value] of Object.entries(item)) {
       if (key === '_id' || key === 'sectionData') continue;
 
-      if (!key.startsWith('sectionData.')) {
-        throw new BadRequestException(`All fields must belong to 'sectionData', invalid key: ${key}`);
-      }
-
-      const parts = key.split('.');
-      if (parts.length > 1) {
+      if (key.startsWith('sectionData.')) {
+        const parts = key.split('.');
         let current = sectionData;
         for (let i = 1; i < parts.length; i++) {
           const part = parts[i];
@@ -215,6 +213,9 @@ if (isAdd) {
             current = current[part];
           }
         }
+      } else {
+        // ✅ any non-sectionData key will go to root-level
+        extraFields[key] = value;
       }
     }
 
@@ -222,6 +223,7 @@ if (isAdd) {
       _id: id,
       sectionData: sectionData,
       createdAt: new Date(),
+      ...extraFields, // ✅ merge extra fields into root
     };
 
     await collection.insertOne(doc as any);
