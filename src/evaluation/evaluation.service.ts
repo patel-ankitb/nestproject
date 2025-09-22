@@ -17,7 +17,9 @@ export class EvaluationService {
       db,
     );
 
-    // 1. Get evaluation document by ID
+    const normalizeName = (name: string) => name?.trim().toLowerCase();
+
+    // 1. Evaluation doc
     const evaluationDoc = await connection
       .collection<{ _id: string; sectionData: any }>('evaluation')
       .findOne({ _id: evaluationId }, { projection: { _id: 1, sectionData: 1 } });
@@ -28,7 +30,7 @@ export class EvaluationService {
       );
     }
 
-    // 2. Get master field definitions
+    // 2. Master fields
     const masterDocs = await connection
       .collection('evaluationmaster')
       .find({}, { projection: { sectionData: 1 } })
@@ -37,33 +39,32 @@ export class EvaluationService {
     const sectionFilledCounts: Record<string, number> = {};
     const sectionTotalCounts: Record<string, number> = {};
 
-    // 3. Loop over master definitions
+    // 3. Loop and count
     for (const masterDoc of masterDocs) {
       const evalField = masterDoc.sectionData?.Evaluation;
       if (!evalField) continue;
 
-      const sectionName = evalField.mainlabel?.trim();
+      const sectionNameRaw = evalField.mainlabel?.trim();
       const fieldKey = evalField.field?.trim();
-      if (!sectionName || !fieldKey) continue;
+      if (!sectionNameRaw || !fieldKey) continue;
 
-      // init counters
-      if (!sectionTotalCounts[sectionName]) sectionTotalCounts[sectionName] = 0;
-      if (!sectionFilledCounts[sectionName]) sectionFilledCounts[sectionName] = 0;
+      const sectionKey = normalizeName(sectionNameRaw);
 
-      sectionTotalCounts[sectionName]++;
+      if (!sectionTotalCounts[sectionKey]) sectionTotalCounts[sectionKey] = 0;
+      if (!sectionFilledCounts[sectionKey]) sectionFilledCounts[sectionKey] = 0;
 
-      // === Case-insensitive matching ===
+      sectionTotalCounts[sectionKey]++;
+
       const sectionObj =
-        evaluationDoc.sectionData?.[sectionName] ??
-        evaluationDoc.sectionData?.[sectionName.toLowerCase()] ??
-        evaluationDoc.sectionData?.[sectionName.toUpperCase()];
+        evaluationDoc.sectionData?.[sectionNameRaw] ??
+        evaluationDoc.sectionData?.[sectionNameRaw.toLowerCase()] ??
+        evaluationDoc.sectionData?.[sectionNameRaw.toUpperCase()];
 
       const value =
         sectionObj?.[fieldKey] ??
         sectionObj?.[fieldKey.toLowerCase()] ??
         sectionObj?.[fieldKey.toUpperCase()];
 
-      // === Filled check ===
       const isFilled =
         value !== null &&
         value !== undefined &&
@@ -71,27 +72,45 @@ export class EvaluationService {
         (!(Array.isArray(value)) || value.length > 0) &&
         (typeof value !== 'object' || Object.keys(value || {}).length > 0);
 
-      if (isFilled) {
-        sectionFilledCounts[sectionName]++;
-      }
-
-      // Debug log (optional)
-      // console.log({ sectionName, fieldKey, value, isFilled });
+      if (isFilled) sectionFilledCounts[sectionKey]++;
     }
 
-    // 4. Calculate percentages
-    const sectionPercentages = Object.keys(sectionTotalCounts).map((sectionName) => {
-      const total = sectionTotalCounts[sectionName];
-      const filled = sectionFilledCounts[sectionName] || 0;
-      const percentage = total > 0 ? parseFloat(((filled / total) * 100).toFixed(2)) : 0;
+    // 4. Predefined sequence
+    const predefinedOrder = [
+      "Car Condition",
+      "Car Details",
+      "Body",
+      "Tyre",
+      "Interior",
+      "Engine",
+      "Suspension",
+      "Brakes",
+      "Transmission",
+      "Electrical",
+      "Miscellaneous",
+      "AC Compressor",
+      "Battery",
+      "Remarks",
+    ];
 
-      return { name: sectionName, percentage };
+    const sections = predefinedOrder.map((sectionName, idx) => {
+      const sectionKey = normalizeName(sectionName);
+      const total = sectionTotalCounts[sectionKey] || 0;
+      const filled = sectionFilledCounts[sectionKey] || 0;
+      const percentage = total > 0 ? parseFloat(((filled / total) * 100).toFixed(2)) : 0;
+      const id = idx + 1;
+
+      return {
+        id,
+        name: sectionName,
+        percentage,
+      };
     });
 
     return {
       moduleName,
       evaluationId,
-      sectionPercentages,
+      sections,
       createdAt: new Date(),
     };
   }
