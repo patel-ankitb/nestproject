@@ -7,6 +7,8 @@ import { addeditmfindmodule } from './addeditmfind/addeditmfindmodule';
 import { format } from 'path';
 import { formatmodule } from './format/format.module';
 import { EvaluationModule } from './evaluation/evaluation.module';
+import { UploadModule } from './fileupload/file.module';
+// import { filemodule } from './fileupload/file.module';
 
 
 @Module({
@@ -18,6 +20,8 @@ import { EvaluationModule } from './evaluation/evaluation.module';
     addeditmfindmodule,
     formatmodule,
      EvaluationModule,
+    //  filemodule
+    UploadModule
 
   ],
   // controllers: [FormatcontrollerController],
