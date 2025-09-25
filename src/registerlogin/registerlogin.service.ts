@@ -264,7 +264,8 @@ export class RegisterLoginService {
         };
       }
     } catch (err: any) {
-      throw new InternalServerErrorException(err.message);
+      // throw new InternalServerErrorException(err.message);
+      return { success: false, message: err.message };
     }
   }
 
