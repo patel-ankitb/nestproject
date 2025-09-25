@@ -33,6 +33,7 @@
     "@nestjs/platform-express": "^11.1.6",
     "@nestjs/platform-fastify": "^11.1.6",
     "@nestjs/serve-static": "^5.0.3",
+    "axios": "^1.12.2",
     "bcrypt": "^6.0.0",
     "bcryptjs": "^3.0.2",
     "class-transformer": "^0.5.1",
@@ -49,6 +50,7 @@
     "serve-static": "^2.2.0",
     "sharp": "^0.34.4",
     "stream-json": "^1.9.1",
+    "twilio": "^5.9.0",
     "winston": "^3.17.0"
   },
   "devDependencies": {
@@ -57,6 +59,7 @@
     "@nestjs/cli": "^11.0.0",
     "@nestjs/schematics": "^11.0.0",
     "@nestjs/testing": "^11.0.1",
+    "@types/axios": "^0.14.4",
     "@types/bcryptjs": "^3.0.0",
     "@types/express": "^5.0.3",
     "@types/jest": "^30.0.0",
@@ -64,6 +67,7 @@
     "@types/node": "^22.10.7",
     "@types/sharp": "^0.32.0",
     "@types/supertest": "^6.0.2",
+    "@types/twilio": "^3.19.3",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^10.0.1",
     "eslint-plugin-prettier": "^5.2.2",
