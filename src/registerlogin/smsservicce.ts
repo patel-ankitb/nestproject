@@ -42,34 +42,31 @@ class MSG91Provider extends SMSProvider {
   private config: any;
   constructor(config: any) {
     super();
-    this.config = config.msg91;
+    this.config = config;
   }
 
   async sendSMS(to: string, message: string, type: 'msg' | 'otp' = 'msg') {
     try {
       if (process.env.NODE_ENV === 'development') {
         const otp = type === 'otp' ? generateRandomOTP() : null;
-        console.log(
-          `[DEV MODE] Mock SMS sent to ${to} →`,
-          type === 'otp' ? `OTP: ${otp}` : message,
-        );
+        console.log(`[DEV MODE] SMS to ${to} →`, type === 'otp' ? `OTP: ${otp}` : message);
         return { success: true, messageId: 'mock-dev', otp };
       }
 
       if (type === 'otp') {
-        const otp = /^\d{4,6}$/.test(message) ? message : generateRandomOTP();
-        const payload = { otp };
+        const otp = message || generateRandomOTP();
         const queryParams = new URLSearchParams({
           template_id: this.config.templateId,
           mobile: to,
           authkey: this.config.authKey,
+          otp,
           otp_expiry: '5',
           realTimeResponse: '1',
         }).toString();
 
         const response = await axios.post(
           `${this.config.baseUrl}otp?${queryParams}`,
-          payload,
+          {},
           { headers: { authkey: this.config.authKey, 'content-type': 'application/json' } },
         );
 
@@ -80,26 +77,18 @@ class MSG91Provider extends SMSProvider {
       } else {
         const payload = {
           template_id: this.config.templateId,
-          realTimeResponse: 1,
           recipients: [{ mobiles: to, message }],
         };
         const response = await axios.post(`${this.config.baseUrl}flow/`, payload, {
           headers: { authkey: this.config.authKey, 'content-type': 'application/json' },
         });
+
         if (response.data.type === 'success') {
           return { success: true, messageId: response.data.request_id };
         }
         throw new Error(response.data.message || 'MSG91 MSG error');
       }
     } catch (err: any) {
-      if (err.message?.includes('IP is not whitelisted')) {
-        // Fallback to mock OTP if IP not whitelisted
-        const otp = type === 'otp' ? generateRandomOTP() : null;
-        console.warn(
-          `[MSG91] IP not whitelisted. Using fallback mock OTP for ${to}: ${otp}`,
-        );
-        return { success: true, messageId: 'mock-fallback', otp };
-      }
       throw new InternalServerErrorException(`MSG91 send error: ${err.message}`);
     }
   }
@@ -107,7 +96,7 @@ class MSG91Provider extends SMSProvider {
   async verifyOTP(to: string, otp: string) {
     try {
       if (process.env.NODE_ENV === 'development') {
-        console.log(`[DEV MODE] Mock OTP verification for ${to} → OTP: ${otp}`);
+        console.log(`[DEV MODE] Verify OTP ${otp} for ${to}`);
         return { success: true, message: 'OTP verified (mock)' };
       }
 
@@ -136,13 +125,13 @@ class TwilioProvider extends SMSProvider {
   private config: any;
   constructor(config: any) {
     super();
-    this.config = config.twilio;
+    this.config = config;
   }
 
   async sendSMS(to: string, message: string) {
     try {
       if (process.env.NODE_ENV === 'development') {
-        console.log(`[DEV MODE] Mock Twilio SMS to ${to}: ${message}`);
+        console.log(`[DEV MODE] Twilio SMS to ${to}: ${message}`);
         return { success: true, messageId: 'mock-dev' };
       }
 
@@ -194,7 +183,7 @@ export class SMSService {
     id: string,
     to: string,
     message: string,
-    type: 'msg' | 'otp' = 'msg',
+    type: 'msg' | 'otp',
   ) {
     try {
       const appDb = await getAppDB(cn_str, dbName);
@@ -203,8 +192,29 @@ export class SMSService {
         throw new InternalServerErrorException('SMS configuration not found');
       }
 
-      const config = configDoc.sectionData.sms;
-      const provider = SMSFactory.getProvider(config);
+      const smsConfig = configDoc.sectionData.sms;
+
+      // ✅ Select correct provider config
+      let providerConfig: any;
+      if (smsConfig.smsProvider?.toLowerCase() === 'msg91') {
+        providerConfig = {
+          ...smsConfig.msg91,
+          smsProvider: 'msg91',
+          type: smsConfig.type,
+        };
+      } else if (smsConfig.smsProvider?.toLowerCase() === 'twilio') {
+        providerConfig = {
+          ...smsConfig.twilio,
+          smsProvider: 'twilio',
+          type: smsConfig.type,
+        };
+      } else {
+        throw new InternalServerErrorException(
+          `Unsupported SMS provider: ${smsConfig.smsProvider}`,
+        );
+      }
+
+      const provider = SMSFactory.getProvider(providerConfig);
       return await provider.sendSMS(to, message, type);
     } catch (err: any) {
       throw new InternalServerErrorException(`sendMessage failed: ${err.message}`);
@@ -227,11 +237,33 @@ export class SMSService {
         throw new InternalServerErrorException('SMS configuration not found');
       }
 
-      const config = configDoc.sectionData.sms;
-      const provider = SMSFactory.getProvider(config);
+      const smsConfig = configDoc.sectionData.sms;
+
+      // ✅ Select correct provider config
+      let providerConfig: any;
+      if (smsConfig.smsProvider?.toLowerCase() === 'msg91') {
+        providerConfig = {
+          ...smsConfig.msg91,
+          smsProvider: 'msg91',
+          type: smsConfig.type,
+        };
+      } else if (smsConfig.smsProvider?.toLowerCase() === 'twilio') {
+        providerConfig = {
+          ...smsConfig.twilio,
+          smsProvider: 'twilio',
+          type: smsConfig.type,
+        };
+      } else {
+        throw new InternalServerErrorException(
+          `Unsupported SMS provider: ${smsConfig.smsProvider}`,
+        );
+      }
+
+      const provider = SMSFactory.getProvider(providerConfig);
       return await provider.verifyOTP(to, otp);
     } catch (err: any) {
       throw new InternalServerErrorException(`verifyOTP failed: ${err.message}`);
     }
   }
 }
+

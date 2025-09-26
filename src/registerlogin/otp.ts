@@ -11,6 +11,7 @@ export async function sendOtp(email: string, length = 4, type = 2, appName: stri
 
   const otp = Math.floor(1000 + Math.random() * 9000).toString();
   const smsService = new SMSService();
+  console.log(" Sending OTP:", smsService);
   await smsService.sendMessage(appName, cn_str, dbName, smsConfig._id.toString(), email, otp, 'otp');
 
   return otp; // store in DB or cache as needed

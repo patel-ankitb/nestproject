@@ -9,6 +9,7 @@ import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
 import mongoose, { Connection } from 'mongoose';
 import { SMSService } from './smsservicce';
+import { EmailService } from './emailservice';
 
 interface AppConfigType {
   _id: any;
@@ -87,7 +88,6 @@ export class RegisterLoginService {
       const logsCollection = db.collection<any>('login_logs');
       const otpLogsCollection = db.collection<any>('otp_logs');
 
-      // ===== Check existing user =====
       const orFilters: any[] = [];
       if (email) orFilters.push({ 'sectionData.appuser.email': email.toLowerCase() });
       if (mobile) orFilters.push({ 'sectionData.appuser.mobile': mobile });
@@ -101,7 +101,7 @@ export class RegisterLoginService {
       const hashedPassword =
         password && !['otp', 'oauth'].includes(type) ? await bcrypt.hash(password, 10) : '';
 
-      const newUserId = Date.now().toString(); // ✅ always string
+      const newUserId = Date.now().toString();
       const newUser = {
         _id: newUserId,
         sectionData: {
@@ -132,7 +132,7 @@ export class RegisterLoginService {
         const otp = Math.floor(1000 + Math.random() * 9000).toString();
 
         await otpLogsCollection.insertOne({
-          _id: Date.now().toString(), // ✅ string id
+          _id: Date.now().toString(),
           userId: newUserId,
           otp,
           createdAt: new Date(),
@@ -148,15 +148,11 @@ export class RegisterLoginService {
           user: {
             _id: newUser._id,
             name: newUser.sectionData.appuser.name,
-            legalname: newUser.sectionData.appuser.legalname,
-            panNumber: newUser.sectionData.appuser.panNumber,
-            mobile: newUser.sectionData.appuser.mobile,
-            role: assignedRole.sectionData?.approle,
+            mobile,
           },
         };
       }
 
-      // ===== Normal signup logs =====
       await logsCollection.insertOne({
         _id: Date.now().toString(),
         u_id: newUserId,
@@ -175,21 +171,20 @@ export class RegisterLoginService {
         user: {
           _id: newUserId,
           name: newUser.sectionData.appuser.name,
-          legalname: newUser.sectionData.appuser.legalname,
-          panNumber: newUser.sectionData.appuser.panNumber,
-          mobile: newUser.sectionData.appuser.mobile,
-          role: assignedRole.sectionData?.approle,
+          mobile,
         },
       };
     } catch (err: any) {
       throw new InternalServerErrorException(err.message);
     }
   }
-
   // ===== LOGIN =====
   async loginUser(dto: any) {
-    const { appName, email, name, password, type } = dto;
-    if (!appName || (!email && !name)) throw new BadRequestException('appName and email/name required');
+    const { appName, name, type } = dto;
+
+    if (!appName) throw new BadRequestException('appName is required');
+    if (type === 'otp' && !name)
+      throw new BadRequestException('Name (mobile/email) is required for OTP login');
 
     try {
       const { cn_str, dbName } = await this.resolveAppConfig(appName);
@@ -198,10 +193,104 @@ export class RegisterLoginService {
 
       const usersCollection = db.collection<any>('appuser');
       const rolesCollection = db.collection<any>('approle');
-      const logsCollection = db.collection<any>('login_logs');
       const otpLogsCollection = db.collection<any>('otp_logs');
 
-      // Build search filters
+      let user;
+
+      // ===== OTP LOGIN =====
+      if (type === 'otp') {
+        // Detect if 'name' is email or mobile
+        const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(name);
+
+        if (isEmail) {
+          user = await usersCollection.findOne({
+            'sectionData.appuser.email': name.toLowerCase(),
+          });
+        } else {
+          user = await usersCollection.findOne({
+            'sectionData.appuser.mobile': name,
+          });
+        }
+
+        if (!user) throw new NotFoundException('User not found');
+
+        const role = await rolesCollection.findOne({
+          _id: user.sectionData.appuser.role,
+        });
+        if (!role) throw new NotFoundException('Role not found');
+
+        // Generate OTP
+        const otp = Math.floor(1000 + Math.random() * 9000).toString();
+
+        // Save OTP log with string IDs
+        await otpLogsCollection.insertOne({
+          _id: Date.now().toString(),
+          userId: user._id.toString(),
+          otp,
+          createdAt: new Date(),
+          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+          used: false,
+        });
+
+        // Send OTP via SMS or Email
+        if (!isEmail) {
+          // Mobile → SMS
+          const smsService = new SMSService();
+          const smsConfigDoc = await db.collection('sms').findOne({});
+          if (!smsConfigDoc?.sectionData?.sms)
+            throw new InternalServerErrorException('SMS configuration not found');
+          const smsConfigId = smsConfigDoc._id.toString();
+
+        const send =   await smsService.sendMessage(
+            appName,
+            cn_str,
+            dbName,
+            smsConfigId,
+            user.sectionData.appuser.mobile,
+            otp,
+            'otp',
+          );
+          
+          console.log('User OTP login successful:', send);
+        } else {
+          // Email → SMTP
+          const emailService = new EmailService();
+
+          const usere = await emailService.sendOtpEmail(user.sectionData.appuser.email, otp);
+
+        }
+        return {
+          success: true,
+          message: 'OTP sent successfully',
+          userId: user._id.toString(), // only string
+        };
+      }
+
+      // ===== Password login (optional) =====
+      throw new BadRequestException('Password login not implemented in this snippet');
+    } catch (err: any) {
+      return { success: false, message: err.message };
+    }
+  }
+
+
+
+  // ===== VERIFY OTP =====
+  async verifyOtp(dto: any) {
+    const { appName, email, name, otp } = dto;
+    if (!appName || (!email && !name) || !otp) {
+      throw new BadRequestException('appName, email/name, and otp are required');
+    }
+
+    try {
+      const { cn_str, dbName } = await this.resolveAppConfig(appName);
+      const conn = await this.getConnection(cn_str, dbName);
+      const db = conn.useDb(dbName);
+
+      const usersCollection = db.collection<any>('appuser');
+      const rolesCollection = db.collection<any>('approle');
+      const otpLogsCollection = db.collection<any>('otp_logs');
+
       const orFilters: any[] = [];
       if (email) orFilters.push({ 'sectionData.appuser.email': email.toLowerCase() });
       if (name) orFilters.push({ 'sectionData.appuser.mobile': name });
@@ -212,130 +301,32 @@ export class RegisterLoginService {
       const role = await rolesCollection.findOne({ _id: user.sectionData.appuser.role });
       if (!role) throw new NotFoundException('Role not found');
 
-      if (type !== 'otp') {
-        const valid = await bcrypt.compare(password, user.sectionData.appuser.password || '');
-        if (!valid) throw new UnauthorizedException('Invalid password');
+      // ✅ Find latest OTP
+      const otpLog = await otpLogsCollection.findOne(
+        { userId: user._id.toString(), otp, used: false },
+        { sort: { createdAt: -1 } },
+      );
 
-        await logsCollection.insertOne({
-          _id: Date.now().toString(),
-          u_id: user._id.toString(),
-          r_id: role._id.toString(),
-          tokenVersion: 1,
-          logs: [{ type: 'in', time: new Date() }],
-        });
+      if (!otpLog) throw new UnauthorizedException('Invalid or expired OTP');
+      if (new Date(otpLog.expiresAt) < new Date()) throw new UnauthorizedException('OTP expired');
 
-        const { accessToken, refreshToken } = this.generateTokens(user._id.toString(), role._id.toString());
+      await otpLogsCollection.updateOne({ _id: otpLog._id }, { $set: { used: true } });
 
-        return {
-          success: true,
-          message: 'Login successful',
-          accessToken,
-          refreshToken,
-          user: {
-            _id: user._id.toString(),
-            username: user.sectionData.appuser.name,
-            legalname: user.sectionData.appuser.legalname,
-            role: role.sectionData?.approle,
-          },
-        };
-      } else {
-        const otp = Math.floor(1000 + Math.random() * 9000).toString();
+      const { accessToken, refreshToken } = this.generateTokens(user._id.toString(), role._id.toString());
 
-        await otpLogsCollection.insertOne({
-          _id: Date.now().toString(),
-          userId: user._id.toString(),
-          otp,
-          createdAt: new Date(),
-          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-          used: false,
-        });
-
-        const smsService = new SMSService();
-        const smsConfigDoc = await db.collection('sms').findOne({});
-        if (!smsConfigDoc?.sectionData?.sms) throw new InternalServerErrorException('SMS configuration not found');
-        const smsConfigId = smsConfigDoc._id.toString();
-
-        await smsService.sendMessage(appName, cn_str, dbName, smsConfigId, user.sectionData.appuser.mobile, otp, 'otp');
-
-        return {
-          success: true,
-          message: 'OTP sent to mobile',
-          userId: user._id.toString(),
-        };
-      }
+      return {
+        success: true,
+        message: 'OTP verified, login successful',
+        accessToken,
+        refreshToken,
+        user: {
+          _id: user._id.toString(),
+          username: user.sectionData.appuser.name,
+          role: role.sectionData?.approle,
+        },
+      };
     } catch (err: any) {
-      // throw new InternalServerErrorException(err.message);
-      return { success: false, message: err.message };
+      throw new InternalServerErrorException(err.message);
     }
   }
-
- // ===== VERIFY OTP =====
-async verifyOtp(dto: any) {
-  const { appName, email, name, otp } = dto;
-  if (!appName || (!email && !name) || !otp) {
-    throw new BadRequestException('appName, email/name, and otp are required');
-  }
-
-  try {
-    const { cn_str, dbName } = await this.resolveAppConfig(appName);
-    const conn = await this.getConnection(cn_str, dbName);
-    const db = conn.useDb(dbName);
-
-    const usersCollection = db.collection<any>('appuser');
-    const rolesCollection = db.collection<any>('approle');
-    const otpLogsCollection = db.collection<any>('otp_logs');
-
-    // 🔹 Find user
-    const orFilters: any[] = [];
-    if (email) orFilters.push({ 'sectionData.appuser.email': email.toLowerCase() });
-    if (name) orFilters.push({ 'sectionData.appuser.mobile': name });
-
-    const user = await usersCollection.findOne({ $or: orFilters.length ? orFilters : [{}] });
-    if (!user) throw new NotFoundException('User not found');
-
-    // 🔹 Validate OTP
-    // const otpDoc = await otpLogsCollection.findOne({
-    //   userId: user._id.toString(),
-    //   otp,
-    //   expiresAt: { $gt: new Date() },
-    //   used: false,
-    // });
-
-    if (!otp) {
-      throw new UnauthorizedException('Invalid or expired OTP');
-    }
-
-    // 🔹 Mark OTP as used
-    await otpLogsCollection.updateOne(
-      { _id: otp._id },
-      { $set: { used: true } }
-    );
-
-    // 🔹 Get role
-    const role = await rolesCollection.findOne({ _id: user.sectionData.appuser.role });
-    if (!role) throw new NotFoundException('Role not found');
-
-    // 🔹 Generate tokens
-    const { accessToken, refreshToken } = this.generateTokens(
-      user._id.toString(),
-      role._id.toString(),
-    );
-
-    return {
-      success: true,
-      message: 'OTP verified successfully',
-      accessToken,
-      refreshToken,
-      user: {
-        _id: user._id.toString(), // ✅ always string
-        username: user.sectionData.appuser.name,
-        legalname: user.sectionData.appuser.legalname,
-        role: role.sectionData?.approle,
-      },
-    };
-  } catch (err: any) {
-    throw new InternalServerErrorException(err.message);
-  }
-}
-
 }
