@@ -12,11 +12,7 @@ export class RegisterLoginController {
     return this.registerLoginService.signupUser(body);
   }
 
-  @Post('login')
-  @HttpCode(HttpStatus.OK)
-  async login(@Body() body: any): Promise<any> {
-    return this.registerLoginService.loginUser(body);
-  }
+ 
 
   @Post('verify-otp')
   @HttpCode(HttpStatus.OK)

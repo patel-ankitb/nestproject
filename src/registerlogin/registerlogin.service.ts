@@ -186,100 +186,100 @@ async signupUser(dto: any) {
   }
 }
 
-  // ===== LOGIN =====
-  async loginUser(dto: any) {
-    const { appName, name, type } = dto;
+  // // ===== LOGIN =====
+  // async loginUser(dto: any) {
+  //   const { appName, name, type } = dto;
 
-    if (!appName) throw new BadRequestException('appName is required');
-    if (type === 'otp' && !name)
-      throw new BadRequestException('Name (mobile/email) is required for OTP login');
+  //   if (!appName) throw new BadRequestException('appName is required');
+  //   if (type === 'otp' && !name)
+  //     throw new BadRequestException('Name (mobile/email) is required for OTP login');
 
-    try {
-      const { cn_str, dbName } = await this.resolveAppConfig(appName);
-      const conn = await this.getConnection(cn_str, dbName);
-      const db = conn.useDb(dbName);
+  //   try {
+  //     const { cn_str, dbName } = await this.resolveAppConfig(appName);
+  //     const conn = await this.getConnection(cn_str, dbName);
+  //     const db = conn.useDb(dbName);
 
-      const usersCollection = db.collection<any>('appuser');
-      const rolesCollection = db.collection<any>('approle');
-      const otpLogsCollection = db.collection<any>('otp_logs');
+  //     const usersCollection = db.collection<any>('appuser');
+  //     const rolesCollection = db.collection<any>('approle');
+  //     const otpLogsCollection = db.collection<any>('otp_logs');
 
-      let user;
+  //     let user;
 
-      // ===== OTP LOGIN =====
-      if (type === 'otp') {
-        // Detect if 'name' is email or mobile
-        const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(name);
+  //     // ===== OTP LOGIN =====
+  //     if (type === 'otp') {
+  //       // Detect if 'name' is email or mobile
+  //       const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(name);
 
-        if (isEmail) {
-          user = await usersCollection.findOne({
-            'sectionData.appuser.email': name.toLowerCase(),
-          });
-        } else {
-          user = await usersCollection.findOne({
-            'sectionData.appuser.mobile': name,
-          });
-        }
+  //       if (isEmail) {
+  //         user = await usersCollection.findOne({
+  //           'sectionData.appuser.email': name.toLowerCase(),
+  //         });
+  //       } else {
+  //         user = await usersCollection.findOne({
+  //           'sectionData.appuser.mobile': name,
+  //         });
+  //       }
 
-        if (!user) throw new NotFoundException('User not found');
+  //       if (!user) throw new NotFoundException('User not found');
 
-        const role = await rolesCollection.findOne({
-          _id: user.sectionData.appuser.role,
-        });
-        if (!role) throw new NotFoundException('Role not found');
+  //       const role = await rolesCollection.findOne({
+  //         _id: user.sectionData.appuser.role,
+  //       });
+  //       if (!role) throw new NotFoundException('Role not found');
 
-        // Generate OTP
-        const otp = Math.floor(1000 + Math.random() * 9000).toString();
+  //       // Generate OTP
+  //       const otp = Math.floor(1000 + Math.random() * 9000).toString();
 
-        // Save OTP log with string IDs
-        await otpLogsCollection.insertOne({
-          _id: Date.now().toString(),
-          userId: user._id.toString(),
-          otp,
-          createdAt: new Date(),
-          expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-          used: false,
-        });
+  //       // Save OTP log with string IDs
+  //       await otpLogsCollection.insertOne({
+  //         _id: Date.now().toString(),
+  //         userId: user._id.toString(),
+  //         otp,
+  //         createdAt: new Date(),
+  //         expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+  //         used: false,
+  //       });
 
-        // Send OTP via SMS or Email
-        if (!isEmail) {
-          // Mobile → SMS
-          const smsService = new SMSService();
-          const smsConfigDoc = await db.collection('sms').findOne({});
-          if (!smsConfigDoc?.sectionData?.sms)
-            throw new InternalServerErrorException('SMS configuration not found');
-          const smsConfigId = smsConfigDoc._id.toString();
+  //       // Send OTP via SMS or Email
+  //       if (!isEmail) {
+  //         // Mobile → SMS
+  //         const smsService = new SMSService();
+  //         const smsConfigDoc = await db.collection('sms').findOne({});
+  //         if (!smsConfigDoc?.sectionData?.sms)
+  //           throw new InternalServerErrorException('SMS configuration not found');
+  //         const smsConfigId = smsConfigDoc._id.toString();
 
-        const send =   await smsService.sendMessage(
-            appName,
-            cn_str,
-            dbName,
-            smsConfigId,
-            user.sectionData.appuser.mobile,
-            otp,
-            'otp',
-          );
+  //       const send =   await smsService.sendMessage(
+  //           appName,
+  //           cn_str,
+  //           dbName,
+  //           smsConfigId,
+  //           user.sectionData.appuser.mobile,
+  //           otp,
+  //           'otp',
+  //         );
           
-          console.log('User OTP login successful:', send);
-        } else {
-          // Email → SMTP
-          const emailService = new EmailService();
+  //         console.log('User OTP login successful:', send);
+  //       } else {
+  //         // Email → SMTP
+  //         const emailService = new EmailService();
 
-          const usere = await emailService.sendOtpEmail(user.sectionData.appuser.email, otp);
+  //         const usere = await emailService.sendOtpEmail(user.sectionData.appuser.email, otp);
 
-        }
-        return {
-          success: true,
-          message: 'OTP sent successfully',
-          userId: user._id.toString(), // only string
-        };
-      }
+  //       }
+  //       return {
+  //         success: true,
+  //         message: 'OTP sent successfully',
+  //         userId: user._id.toString(), // only string
+  //       };
+  //     }
 
-      // ===== Password login (optional) =====
-      throw new BadRequestException('Password login not implemented in this snippet');
-    } catch (err: any) {
-      return { success: false, message: err.message };
-    }
-  }
+  //     // ===== Password login (optional) =====
+  //     throw new BadRequestException('Password login not implemented in this snippet');
+  //   } catch (err: any) {
+  //     return { success: false, message: err.message };
+  //   }
+  // }
 
 
 
@@ -297,7 +297,7 @@ async signupUser(dto: any) {
 
       const usersCollection = db.collection<any>('appuser');
       const rolesCollection = db.collection<any>('approle');
-      const otpLogsCollection = db.collection<any>('otp_logs');
+      // const otpLogsCollection = db.collection<any>('otp_logs');
 
       const orFilters: any[] = [];
       if (email) orFilters.push({ 'sectionData.appuser.email': email.toLowerCase() });
@@ -307,18 +307,18 @@ async signupUser(dto: any) {
       if (!user) throw new NotFoundException('User not found');
 
       const role = await rolesCollection.findOne({ _id: user.sectionData.appuser.role });
-      if (!role) throw new NotFoundException('Role not found');
+      // if (!role) throw new NotFoundException('Role not found');
 
-      // ✅ Find latest OTP
-      const otpLog = await otpLogsCollection.findOne(
-        { userId: user._id.toString(), otp, used: false },
-        { sort: { createdAt: -1 } },
-      );
+      // // ✅ Find latest OTP
+      // const otpLog = await usersCollection.findOne(
+      //   { userId: user._id.toString(), otp, used: false },
+      //   { sort: { createdAt: -1 } },
+      // );
 
-      if (!otpLog) throw new UnauthorizedException('Invalid or expired OTP');
-      if (new Date(otpLog.expiresAt) < new Date()) throw new UnauthorizedException('OTP expired');
+      if (!otp) throw new UnauthorizedException('Invalid or expired OTP');
+      if (new Date(otp.expiresAt) < new Date()) throw new UnauthorizedException('OTP expired');
 
-      await otpLogsCollection.updateOne({ _id: otpLog._id }, { $set: { used: true } });
+      await usersCollection.updateOne({ _id: otp._id }, { $set: { used: true } });
 
       const { accessToken, refreshToken } = this.generateTokens(user._id.toString(), role._id.toString());
 
@@ -359,7 +359,7 @@ async mobileOtpLogin(dto: any) {
     const db = conn.useDb(dbName);
 
     const usersCollection = db.collection<any>('appuser');
-    const otpLogsCollection = db.collection<any>('otp_logs');
+    // const otpLogsCollection = db.collection<any>('otp_logs');
     const smsCollection = db.collection<any>('sms');
 
     // Check if user exists
@@ -393,14 +393,14 @@ async mobileOtpLogin(dto: any) {
     const otp = Math.floor(1000 + Math.random() * 9000).toString();
 
     // Save OTP log with string IDs
-    await otpLogsCollection.insertOne({
-      _id: Date.now().toString(),
-      userId,
-      otp,
-      createdAt: new Date(),
-      expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-      used: false,
-    });
+    // await usersCollection.insertOne({
+    //   _id: Date.now().toString(),
+    //   // userId,
+    //   otp,
+    //   createdAt: new Date(),
+    //   expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+    //   used: false,
+    // });
 
     // Send OTP via SMS
     const smsService = new SMSService();
@@ -423,7 +423,7 @@ async mobileOtpLogin(dto: any) {
     return {
       success: true,
       message: 'OTP sent successfully',
-      userId, // string
+      // userId, // string
     };
   } catch (err: any) {
     throw new InternalServerErrorException(err.message);
