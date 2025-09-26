@@ -71,6 +71,7 @@ class MSG91Provider extends SMSProvider {
         );
         console.log('MSG91 OTP response:', response.data);
         console.log('MSG91 OTP sent to:',  `${this.config.baseUrl}otp?${queryParams}`);
+        console.log('MSG91 OTP sent payload:', this.config.authKey);
 
         if (response.data.type === 'success') {
           return { success: true, messageId: response.data.request_id, otp };
