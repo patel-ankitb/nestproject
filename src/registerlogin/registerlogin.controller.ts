@@ -23,4 +23,11 @@ export class RegisterLoginController {
   async verifyOtp(@Body() body: any): Promise<any> {
     return this.registerLoginService.verifyOtp(body);
   }
+
+  @Post('mobile-otp')
+@HttpCode(HttpStatus.OK)
+async mobileOtp(@Body() body: any): Promise<any> {
+  return this.registerLoginService.mobileOtpLogin(body);
+}
+
 }
