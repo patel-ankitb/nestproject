@@ -130,10 +130,15 @@ export class DatabaseService {
     console.log('Connecting to app DB ..............', dbName);
     console.log('Connection String ..............', connectionString);
     try {
-      const appClient = new MongoClient(connectionString);
-      console.log('App Client before connect:',appClient);
+      const appClient = new MongoClient(connectionString, {
+        connectTimeoutMS: 60000, // Increase to 60 seconds
+        serverSelectionTimeoutMS: 60000, // Increase to 60 seconds
+        retryWrites: true, // Enable retryable writes
+        retryReads: true, // Enable retryable reads
+        maxPoolSize: 10, // Connection pool size
+        minPoolSize: 2, // Minimum connections in pool
+      });
       await appClient.connect();
-      console.log('Connected to app DBmbmbmmbmbmbmmb:',appClient);
       return appClient.db(dbName);
     } catch (err) {
       console.error('Error connecting to app DB:', err);
