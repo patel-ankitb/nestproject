@@ -1,10 +1,11 @@
-import { Injectable, BadRequestException, InternalServerErrorException } from '@nestjs/common';
+import { Injectable, BadRequestException, InternalServerErrorException, OnModuleDestroy } from '@nestjs/common';
 import mongoose, { Connection } from 'mongoose';
 import { MongoClient, Db } from 'mongodb';
 
 @Injectable()
-export class DatabaseService {
+export class DatabaseService implements OnModuleDestroy {
   private mongooseConnections: Map<string, Connection> = new Map();
+  private appClients: Map<string, MongoClient> = new Map();
   private readonly BASE_URI = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017';
   private readonly CONFIG_DB = process.env.CONFIG_DB || 'configdb';
   private readonly appConnectionsCache: Record<string, Db> = {};
@@ -15,32 +16,39 @@ export class DatabaseService {
     this.client.connect().catch(err => console.error('Main MongoDB connection failed:', err));
   }
 
-  // -------------------- Mongoose Connections --------------------
+  async onModuleDestroy() {
+    for (const client of this.appClients.values()) {
+      await client.close();
+    }
+    this.appClients.clear();
+    for (const conn of this.mongooseConnections.values()) {
+      await conn.close();
+    }
+    this.mongooseConnections.clear();
+    await this.client.close();
+  }
+
   async getConnection(cn_str: string, dbName: string): Promise<Connection> {
     const cacheKey = `${cn_str}_${dbName}`;
     if (this.mongooseConnections.has(cacheKey)) return this.mongooseConnections.get(cacheKey)!;
 
     try {
-      const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
+      const connection = await mongoose.createConnection(cn_str, {
+        dbName,
+        connectTimeoutMS: 60000,
+        serverSelectionTimeoutMS: 60000,
+        retryWrites: true,
+        retryReads: true,
+        maxPoolSize: 10,
+        minPoolSize: 2,
+      }).asPromise();
       this.mongooseConnections.set(cacheKey, connection);
       return connection;
-      // const connection = await mongoose.createConnection(cn_str, {
-      //   dbName,
-      //   connectTimeoutMS: 60000, // Increase to 60 seconds
-      //   serverSelectionTimeoutMS: 60000, // Increase to 60 seconds
-      //   retryWrites: true, // Enable retryable writes
-      //   retryReads: true, // Enable retryable reads
-      //   maxPoolSize: 10, // Connection pool size
-      //   minPoolSize: 2, // Minimum connections in pool
-        
-      // }).asPromise();
-      // return connection;
     } catch (err) {
       throw new InternalServerErrorException(`Failed to connect to MongoDB at ${cn_str}: ${err.message}`);
     }
   }
 
-  // -------------------- App Config / Modules --------------------
   async getDbConfigFromKey(key: string) {
     const configConn = await this.getConnection(this.BASE_URI, this.CONFIG_DB);
     const config = await configConn.collection('appconfigs').findOne({
@@ -86,7 +94,6 @@ export class DatabaseService {
     return moduleObj;
   }
 
-  // -------------------- Dynamic App DB (Native Mongo) --------------------
   async getAppDB(appName: string): Promise<Db> {
     if (!appName) {
       throw new BadRequestException('appName is required');
@@ -94,15 +101,12 @@ export class DatabaseService {
 
     console.log('Fetching DB for appName:', appName);
 
-    // 1. Check cache
     if (this.appConnectionsCache[appName]) return this.appConnectionsCache[appName];
 
-    // 2. Ensure main client connected (MongoDB v4+)
     await this.client.connect().catch(err => {
       throw new InternalServerErrorException(`Failed to connect main MongoDB: ${err.message}`);
     });
 
-    // 3. Fetch app configuration from "customize.custom_apps"
     const appConfig = await this.client.db('customize')
       .collection('custom_apps')
       .findOne({ appnm: appName });
@@ -118,37 +122,42 @@ export class DatabaseService {
       throw new BadRequestException(`Incomplete app configuration for appName: '${appName}'`);
     }
 
-    // 4. Connect to the app DB (cache per appName)
     const appDb = await this.connectToAppDB(cn_str, db);
-    console.log('Connected to app DttttttttB ..............',appDb);
     this.appConnectionsCache[appName] = appDb;
-
     return appDb;
   }
 
-  private async connectToAppDB(connectionString: string, dbName: string): Promise<Db> {
-    console.log('Connecting to app DB ..............', dbName);
-    console.log('Connection String ..............', connectionString);
-    try {
-      // const appClient = new MongoClient(connectionString, {
-      //   connectTimeoutMS: 60000, // Increase to 60 seconds
-      //   serverSelectionTimeoutMS: 60000, // Increase to 60 seconds
-      //   retryWrites: true, // Enable retryable writes
-      //   retryReads: true, // Enable retryable reads
-      //   maxPoolSize: 10, // Connection pool size
-      //   minPoolSize: 2, // Minimum connections in pool
-      // });
-      const appClient = await mongoose.createConnection(connectionString, { dbName }).asPromise();
+  private async connectToAppDB(connectionString: string, dbName: string, retries = 3): Promise<Db> {
+    console.log('Connecting to app DB:', dbName);
+    console.log('Connection String:', connectionString);
     const cacheKey = `${connectionString}_${dbName}`;
-      
-      this.mongooseConnections.set(cacheKey,appClient);
-
-      console.log('App Client before connect:',appClient);
-      // await appClient.connect();
-      return appClient as unknown as Db;
-    } catch (err) {
-      console.error('Error connecting to app DB:', err);
-      throw new InternalServerErrorException(`Failed to connect to app DB '${dbName}': ${err.message}`);
+    for (let attempt = 1; attempt <= retries; attempt++) {
+      try {
+        let appClient = this.appClients.get(cacheKey);
+        if (!appClient) {
+          appClient = new MongoClient(connectionString, {
+            connectTimeoutMS: 60000,
+            serverSelectionTimeoutMS: 60000,
+            retryWrites: true,
+            retryReads: true,
+            maxPoolSize: 10,
+            minPoolSize: 2,
+          });
+          console.time('ConnectionTime');
+          await appClient.connect();
+          console.timeEnd('ConnectionTime');
+          this.appClients.set(cacheKey, appClient);
+        }
+        return appClient.db(dbName);
+      } catch (err) {
+        console.error(`Attempt ${attempt} failed: ${JSON.stringify(err, null, 2)}`);
+        if (attempt === retries) {
+          throw new InternalServerErrorException(`Failed to connect to app DB '${dbName}' after ${retries} attempts: ${err.message}`);
+        }
+        await new Promise(resolve => setTimeout(resolve, 1000 * attempt));
+      }
     }
+    // Ensure function always either returns a Db or throws, satisfy TypeScript control flow analysis.
+    throw new InternalServerErrorException(`Failed to connect to app DB '${dbName}' after ${retries} attempts`);
   }
 }
