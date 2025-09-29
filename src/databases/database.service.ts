@@ -109,7 +109,7 @@ export class DatabaseService {
 
     // 4. Connect to the app DB (cache per appName)
     const appDb = await this.connectToAppDB(cn_str, db);
-    console.log('Connected to app DB ..............',appDb);
+    console.log('Connected to app DttttttttB ..............',appDb);
     this.appConnectionsCache[appName] = appDb;
 
     return appDb;
@@ -117,6 +117,7 @@ export class DatabaseService {
 
   private async connectToAppDB(connectionString: string, dbName: string): Promise<Db> {
     console.log('Connecting to app DB ..............', dbName);
+    console.log('Connection String ..............', connectionString);
     try {
       const appClient = new MongoClient(connectionString);
       await appClient.connect();
