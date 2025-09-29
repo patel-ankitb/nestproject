@@ -79,6 +79,7 @@ export class PublicMFindService {
 
     // Execute final aggregation with pagination
     const documents = await collection.aggregate(pipeline).toArray();
+    console.log("get data.....", documents);
 
     return {
       success: true,

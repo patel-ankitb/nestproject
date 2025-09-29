@@ -13,7 +13,8 @@ export class DatabaseService {
     if (this.connections.has(cacheKey)) return this.connections.get(cacheKey)!;
 
     const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
-    //  console.log("BASE_URI.............",cn_str);
+     console.log("BASE_URI.............",cn_str);
+     console.log("CONFIG_DB.............",dbName);  
     this.connections.set(cacheKey, connection);
     return connection;
   }
@@ -33,7 +34,7 @@ export class DatabaseService {
       throw new BadRequestException(`No database found for key '${key}'`);
     }
 
-    // console.log("config0.............", config);
+    console.log("config0.............", config);
 
     return {
       db: config.sectionData.appconfigs.db,
