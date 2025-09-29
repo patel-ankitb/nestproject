@@ -120,9 +120,12 @@ export class DatabaseService {
     console.log('Connection String ..............', connectionString);
     try {
       const appClient = new MongoClient(connectionString);
+      console.log('App Client before connect:',appClient);
       await appClient.connect();
+      console.log('Connected to app DBmbmbmmbmbmbmmb:',appClient);
       return appClient.db(dbName);
     } catch (err) {
+      console.error('Error connecting to app DB:', err);
       throw new InternalServerErrorException(`Failed to connect to app DB '${dbName}': ${err.message}`);
     }
   }
