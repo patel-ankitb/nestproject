@@ -130,17 +130,22 @@ export class DatabaseService {
     console.log('Connecting to app DB ..............', dbName);
     console.log('Connection String ..............', connectionString);
     try {
-      const appClient = new MongoClient(connectionString, {
-        connectTimeoutMS: 60000, // Increase to 60 seconds
-        serverSelectionTimeoutMS: 60000, // Increase to 60 seconds
-        retryWrites: true, // Enable retryable writes
-        retryReads: true, // Enable retryable reads
-        maxPoolSize: 10, // Connection pool size
-        minPoolSize: 2, // Minimum connections in pool
-      });
+      // const appClient = new MongoClient(connectionString, {
+      //   connectTimeoutMS: 60000, // Increase to 60 seconds
+      //   serverSelectionTimeoutMS: 60000, // Increase to 60 seconds
+      //   retryWrites: true, // Enable retryable writes
+      //   retryReads: true, // Enable retryable reads
+      //   maxPoolSize: 10, // Connection pool size
+      //   minPoolSize: 2, // Minimum connections in pool
+      // });
+      const appClient = await mongoose.createConnection(connectionString, { dbName }).asPromise();
+    const cacheKey = `${connectionString}_${dbName}`;
+      
+      this.mongooseConnections.set(cacheKey,appClient);
+
       console.log('App Client before connect:',appClient);
-      await appClient.connect();
-      return appClient.db(dbName);
+      // await appClient.connect();
+      return appClient as unknown as Db;
     } catch (err) {
       console.error('Error connecting to app DB:', err);
       throw new InternalServerErrorException(`Failed to connect to app DB '${dbName}': ${err.message}`);
