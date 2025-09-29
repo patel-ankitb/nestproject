@@ -54,9 +54,9 @@ export class AddEditMFindService {
 
 // ===== DB + Module config from DatabaseService =====
 // Update calls
-const config = await this.dbService.getAppDB(key);
+const db = await this.dbService.getAppDB(appName);
 
-    if (!config) {
+    if (!db) {
       throw new BadRequestException('Invalid API key or database configuration not found');
     }
 
@@ -65,24 +65,24 @@ const config = await this.dbService.getAppDB(key);
     // - an object with a `.db` string
     // - a MongoDB Db instance which has `.databaseName`
     let dbName = '';
-    if (typeof config === 'string') {
-      dbName = config;
-    } else if (config && typeof (config as any).db === 'string') {
-      dbName = (config as any).db;
-    } else if (config && typeof (config as any).databaseName === 'string') {
-      dbName = (config as any).databaseName;
-    } else if (config && typeof (config as any).database === 'string') {
-      dbName = (config as any).database;
+    if (typeof db === 'string') {
+      dbName = db;
+    } else if (db && typeof (db as any).db === 'string') {
+      dbName = (db as any).db;
+    } else if (db && typeof (db as any).databaseName === 'string') {
+      dbName = (db as any).databaseName;
+    } else if (db && typeof (db as any).database === 'string') {
+      dbName = (db as any).database;
     }
 
     if (!dbName) {
       throw new BadRequestException('Database name missing in configuration');
     }
 
-    // use getConnection to create a MongoDB connection from a connection string and database name
-    const conn = await (this.dbService as any).getConnection(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017', dbName);
-    // conn may be an object with a .db property or the Db itself — normalize to a Db
-    const db = (conn && (conn as any).db) ? (conn as any).db : (conn as any);
+    // // use getConnection to create a MongoDB connection from a connection string and database name
+    // const conn = await (this.dbService as any).getConnection(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017', dbName);
+    // // conn may be an object with a .db property or the Db itself — normalize to a Db
+    // const db = (conn && (conn as any).db) ? (conn as any).db : (conn as any);
 
     if (!db) throw new BadRequestException('Database connection failed');
 
