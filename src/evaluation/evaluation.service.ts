@@ -1,5 +1,6 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { DatabaseService } from '../databases/database.service';
+import { MongoClient } from 'mongodb';
 
 @Injectable()
 export class EvaluationService {
@@ -11,11 +12,21 @@ export class EvaluationService {
     moduleName: string,
     evaluationId: string,
   ) {
-    const { db } = await this.dbService.getDbConfigFromKey(key);
-    const connection = await this.dbService.getConnection(
-      process.env.MONGO_URI || 'mongodb://127.0.0.1:27017',
-      db,
-    );
+    // getDbConfigFromKey may return either a config object like { db: 'name' } or a string with the db name;
+    // handle both cases and ensure we have a valid db value before proceeding.
+  const dbConfig = await this.dbService.getAppDB(key);
+    const db =
+      typeof dbConfig === 'string' ? dbConfig : (dbConfig && (dbConfig as any).db) ?? undefined;
+
+    if (!db) {
+      throw new BadRequestException(
+        `Database not found for key '${key}'`,
+      );
+    }
+    const mongoUri = process.env.MONGO_URI || 'mongodb://127.0.0.1:27017';
+    const client = await MongoClient.connect(mongoUri);
+    const connection = client.db(db);
+    
 
     const normalizeName = (name: string) => name?.trim().toLowerCase();
 
@@ -107,6 +118,8 @@ export class EvaluationService {
       };
     });
 
+    // close the MongoDB client and return results
+    await client.close();
     return {
       moduleName,
       evaluationId,

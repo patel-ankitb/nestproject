@@ -52,10 +52,37 @@ export class AddEditMFindService {
     const key = headers['x-api-key'];
     if (!key) throw new BadRequestException('x-api-key header is required');
 
-    // ===== DB + Module config from DatabaseService =====
-    const config = await this.dbService.getDbConfigFromKey(key);
-    const conn = await this.dbService.getConnection(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017', config.db);
-    const db = conn.db;
+// ===== DB + Module config from DatabaseService =====
+// Update calls
+const config = await this.dbService.getAppDB(key);
+
+    if (!config) {
+      throw new BadRequestException('Invalid API key or database configuration not found');
+    }
+
+    // derive a string dbName from config which may be:
+    // - a string (database name)
+    // - an object with a `.db` string
+    // - a MongoDB Db instance which has `.databaseName`
+    let dbName = '';
+    if (typeof config === 'string') {
+      dbName = config;
+    } else if (config && typeof (config as any).db === 'string') {
+      dbName = (config as any).db;
+    } else if (config && typeof (config as any).databaseName === 'string') {
+      dbName = (config as any).databaseName;
+    } else if (config && typeof (config as any).database === 'string') {
+      dbName = (config as any).database;
+    }
+
+    if (!dbName) {
+      throw new BadRequestException('Database name missing in configuration');
+    }
+
+    // use getConnection to create a MongoDB connection from a connection string and database name
+    const conn = await (this.dbService as any).getConnection(process.env.MONGO_URI || 'mongodb://127.0.0.1:27017', dbName);
+    // conn may be an object with a .db property or the Db itself — normalize to a Db
+    const db = (conn && (conn as any).db) ? (conn as any).db : (conn as any);
 
     if (!db) throw new BadRequestException('Database connection failed');
 

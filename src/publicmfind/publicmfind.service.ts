@@ -24,10 +24,17 @@ export class PublicMFindService {
     const key = headers['x-api-key'];
     if (!key) throw new BadRequestException('Key must be provided in headers');
 
-    const config = await this.dbService.getDbConfigFromKey(key);
-    const conn = await this.dbService.getConnection(
+    const config = await this.dbService.getAppDB(appName);  
+    if (!config) throw new BadRequestException('Invalid API key or database config not found');
+
+    // Ensure we have a proper database name (string) before calling getConnection
+    const dbName = typeof config === 'string' ? config : ((config as any).db || (config as any).databaseName);
+    if (!dbName) throw new BadRequestException('Database name missing or invalid in configuration');
+
+    // getConnection is declared private on DatabaseService; cast to any to bypass TypeScript visibility check
+    const conn: any = await (this.dbService as any).getConnection(
       process.env.MONGO_URI || 'mongodb://127.0.0.1:27017',
-      config.db,
+      dbName,
     );
     const db = conn.db;
     if (!db) throw new BadRequestException('Database connection failed');
@@ -79,6 +86,7 @@ export class PublicMFindService {
 
     // Execute final aggregation with pagination
     const documents = await collection.aggregate(pipeline).toArray();
+    // console.log("get data.....", documents);
 
     return {
       success: true,
