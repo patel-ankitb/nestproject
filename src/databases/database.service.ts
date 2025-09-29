@@ -14,7 +14,7 @@ export class DatabaseService {
 
     const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
      console.log("BASE_URI.............",cn_str);
-     console.log("CONFIG_DB.............",dbName);  
+     console.log("CONFIG_DB fefufueufbueufeufbuebfuebfuebfuebu.............",dbName);  
     this.connections.set(cacheKey, connection);
     return connection;
   }
