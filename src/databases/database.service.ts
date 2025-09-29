@@ -21,20 +21,20 @@ export class DatabaseService {
     if (this.mongooseConnections.has(cacheKey)) return this.mongooseConnections.get(cacheKey)!;
 
     try {
-      // const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
-      // this.mongooseConnections.set(cacheKey, connection);
-      // return connection;
-      const connection = await mongoose.createConnection(cn_str, {
-        dbName,
-        connectTimeoutMS: 60000, // Increase to 60 seconds
-        serverSelectionTimeoutMS: 60000, // Increase to 60 seconds
-        retryWrites: true, // Enable retryable writes
-        retryReads: true, // Enable retryable reads
-        maxPoolSize: 10, // Connection pool size
-        minPoolSize: 2, // Minimum connections in pool
-        
-      }).asPromise();
+      const connection = await mongoose.createConnection(cn_str, { dbName }).asPromise();
+      this.mongooseConnections.set(cacheKey, connection);
       return connection;
+      // const connection = await mongoose.createConnection(cn_str, {
+      //   dbName,
+      //   connectTimeoutMS: 60000, // Increase to 60 seconds
+      //   serverSelectionTimeoutMS: 60000, // Increase to 60 seconds
+      //   retryWrites: true, // Enable retryable writes
+      //   retryReads: true, // Enable retryable reads
+      //   maxPoolSize: 10, // Connection pool size
+      //   minPoolSize: 2, // Minimum connections in pool
+        
+      // }).asPromise();
+      // return connection;
     } catch (err) {
       throw new InternalServerErrorException(`Failed to connect to MongoDB at ${cn_str}: ${err.message}`);
     }
