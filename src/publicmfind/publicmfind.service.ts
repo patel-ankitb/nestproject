@@ -1,9 +1,11 @@
 import { Injectable, BadRequestException } from '@nestjs/common';
 import { DatabaseService } from '../databases/database.service';
 
+
 @Injectable()
 export class PublicMFindService {
   constructor(private readonly dbService: DatabaseService) {}
+
 
   async getModuleData(headers: any, body: any) {
     const {
@@ -18,29 +20,36 @@ export class PublicMFindService {
       lookups = [],
     } = body;
 
+
     if (!appName) throw new BadRequestException('appName is required in body');
     if (!moduleName) throw new BadRequestException('moduleName is required in body');
+
 
     const key = headers['x-api-key'];
     if (!key) throw new BadRequestException('Key must be provided in headers');
 
-    const config = await this.dbService.getAppDB(appName);  
-    if (!config) throw new BadRequestException('Invalid API key or database config not found');
+
+    const db = await this.dbService.getAppDB(appName);  
+    if (!db) throw new BadRequestException('Invalid API key or database config not found');
+
 
     // Ensure we have a proper database name (string) before calling getConnection
-    const dbName = typeof config === 'string' ? config : ((config as any).db || (config as any).databaseName);
+    const dbName = typeof db === 'string' ? db : ((db as any).db || (db as any).databaseName);
     if (!dbName) throw new BadRequestException('Database name missing or invalid in configuration');
 
+
     // getConnection is declared private on DatabaseService; cast to any to bypass TypeScript visibility check
-    const conn: any = await (this.dbService as any).getConnection(
-      process.env.MONGO_URI || 'mongodb://127.0.0.1:27017',
-      dbName,
-    );
-    const db = conn.db;
-    if (!db) throw new BadRequestException('Database connection failed');
+    // const conn: any = await (this.dbService as any).getConnection(
+    //   process.env.MONGO_URI || 'mongodb://127.0.0.1:27017',
+    //   dbName,
+    // );
+    // const db = conn.db;
+    // if (!db) throw new BadRequestException('Database connection failed');
+
 
     const moduleConfig = await this.dbService.getModuleByName(key, moduleName);
     if (!moduleConfig) throw new BadRequestException(`Module '${moduleName}' not allowed`);
+
 
     // Ensure collection exists
     const collections = await db.listCollections().toArray();
@@ -49,13 +58,16 @@ export class PublicMFindService {
     }
     const collection = db.collection(moduleName);
 
+
     // Construct pipeline with explicit typing
     let pipeline: Array<Record<string, any>> = [];
+
 
     // Match stage
     if (Object.keys(query).length > 0) {
       pipeline.push({ $match: query });
     }
+
 
     // Lookup stages
     if (lookups.length > 0) {
@@ -64,10 +76,12 @@ export class PublicMFindService {
       });
     }
 
+
     // Projection stage
     if (Object.keys(projection).length > 0) {
       pipeline.push({ $project: projection });
     }
+
 
     // Sort stage
     if (sortBy) {
@@ -75,18 +89,22 @@ export class PublicMFindService {
       pipeline.push({ $sort: { [sortBy]: sortDirection } });
     }
 
+
     // Execute aggregation to get total count and documents
     const totalCount = await collection.aggregate(pipeline).toArray();
     const totalCountdb = await collection.countDocuments({});
     const queryCount = await collection.countDocuments(query);
 
+
     // Add pagination if specified
     if (skip > 0) pipeline.push({ $skip: skip });
     if (limit > 0) pipeline.push({ $limit: limit });
 
+
     // Execute final aggregation with pagination
     const documents = await collection.aggregate(pipeline).toArray();
     // console.log("get data.....", documents);
+
 
     return {
       success: true,
