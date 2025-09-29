@@ -114,7 +114,7 @@ export class DatabaseService implements OnModuleDestroy {
     }
 
 
-    console.log('Fetching DB for appName:', appName);
+    // console.log('Fetching DB for appName:', appName);
 
 
     if (this.appConnectionsCache[appName]) return this.appConnectionsCache[appName];
@@ -130,7 +130,7 @@ export class DatabaseService implements OnModuleDestroy {
       .findOne({ appnm: appName });
 
 
-    console.log('App Config:', appConfig);
+    // console.log('App Config:', appConfig);
 
 
     if (!appConfig) {
@@ -151,8 +151,8 @@ export class DatabaseService implements OnModuleDestroy {
 
 
   private async connectToAppDB(connectionString: string, dbName: string, retries = 3): Promise<Db> {
-    console.log('Connecting to app DB:', dbName);
-    console.log('Connection String:', connectionString);
+    // console.log('Connecting to app DB:', dbName);
+    // console.log('Connection String:', connectionString);
     const cacheKey = `${connectionString}_${dbName}`;
     for (let attempt = 1; attempt <= retries; attempt++) {
       try {
