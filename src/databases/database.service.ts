@@ -138,6 +138,7 @@ export class DatabaseService {
         maxPoolSize: 10, // Connection pool size
         minPoolSize: 2, // Minimum connections in pool
       });
+      console.log('App Client before connect:',appClient);
       await appClient.connect();
       return appClient.db(dbName);
     } catch (err) {
