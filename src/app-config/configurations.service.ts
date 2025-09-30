@@ -14,7 +14,7 @@ export class ConfigurationsService {
     const routesConfig = await appDb.collection('schema').findOne({ code: 'ROUTES_CONFIG' });
 
     if (!sidebarConfig || !routesConfig) {
-      throw new NotFoundException('Configuration not found.');
+      throw new NotFoundException({success:false, message:'Configuration not found.'});
     }
 
     return {

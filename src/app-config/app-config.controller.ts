@@ -17,7 +17,7 @@ export class AppConfigController {
       if (error instanceof HttpException) {
         throw error;
       }
-      throw new HttpException('Server error', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException({success:false, message:'Server error', statusCode:HttpStatus.UNAUTHORIZED}, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 }
