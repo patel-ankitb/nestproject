@@ -3,6 +3,11 @@ import axios from 'axios';
 import Twilio from 'twilio';
 import { MongoClient, Db } from 'mongodb';
 
+interface AppConfig {
+  cn_str: string;
+  db: string;
+}
+
 // ===== Helper to get App DB =====
 async function getAppDB(cn_str: string, dbName: string): Promise<Db> {
   try {
@@ -44,15 +49,12 @@ class MSG91Provider extends SMSProvider {
     try {
       if (process.env.NODE_ENV === 'development') {
         const otp = type === 'otp' ? generateRandomOTP() : null;
-        console.log(
-          `[DEV MODE] MSG91 SMS to ${to} →`,
-          type === 'otp' ? `OTP: ${otp}` : message,
-        );
+        console.log(`[DEV MODE] SMS to ${to} →`, type === 'otp' ? `OTP: ${otp}` : message);
         return { success: true, messageId: 'mock-dev', otp };
       }
 
       if (type === 'otp') {
-        const otp = generateRandomOTP();
+        const otp = message || generateRandomOTP();
         const queryParams = new URLSearchParams({
           template_id: this.config.templateId,
           mobile: to,
@@ -67,6 +69,9 @@ class MSG91Provider extends SMSProvider {
           {},
           { headers: { authkey: this.config.authKey, 'content-type': 'application/json' } },
         );
+        console.log('MSG91 OTP response:', response.data);
+        console.log('MSG91 OTP sent to:',  `${this.config.baseUrl}otp?${queryParams}`);
+        console.log('MSG91 OTP sent payload:', this.config.authKey);
 
         if (response.data.type === 'success') {
           return { success: true, messageId: response.data.request_id, otp };
@@ -126,33 +131,16 @@ class TwilioProvider extends SMSProvider {
     this.config = config;
   }
 
-  async sendSMS(to: string, message: string, type: 'msg' | 'otp' = 'msg') {
+  async sendSMS(to: string, message: string) {
     try {
       if (process.env.NODE_ENV === 'development') {
-        const otp = type === 'otp' ? generateRandomOTP() : null;
-        console.log(
-          `[DEV MODE] Twilio SMS to ${to} →`,
-          type === 'otp' ? `OTP: ${otp}` : message,
-        );
-        return { success: true, messageId: 'mock-dev', otp };
+        console.log(`[DEV MODE] Twilio SMS to ${to}: ${message}`);
+        return { success: true, messageId: 'mock-dev' };
       }
 
       const client = Twilio(this.config.accountSid, this.config.authToken);
-      let body = message;
-
-      if (type === 'otp') {
-        const otp = generateRandomOTP();
-        body = `Your OTP is: ${otp}`;
-        const response = await client.messages.create({
-          body,
-          from: this.config.fromNumber,
-          to,
-        });
-        return { success: true, messageId: response.sid, otp };
-      }
-
       const response = await client.messages.create({
-        body,
+        body: message,
         from: this.config.fromNumber,
         to,
       });
@@ -209,11 +197,20 @@ export class SMSService {
 
       const smsConfig = configDoc.sectionData.sms;
 
+      // ✅ Select correct provider config
       let providerConfig: any;
       if (smsConfig.smsProvider?.toLowerCase() === 'msg91') {
-        providerConfig = { ...smsConfig.msg91, smsProvider: 'msg91' };
+        providerConfig = {
+          ...smsConfig.msg91,
+          smsProvider: 'msg91',
+          type: smsConfig.type,
+        };
       } else if (smsConfig.smsProvider?.toLowerCase() === 'twilio') {
-        providerConfig = { ...smsConfig.twilio, smsProvider: 'twilio' };
+        providerConfig = {
+          ...smsConfig.twilio,
+          smsProvider: 'twilio',
+          type: smsConfig.type,
+        };
       } else {
         throw new InternalServerErrorException(
           `Unsupported SMS provider: ${smsConfig.smsProvider}`,
@@ -245,11 +242,20 @@ export class SMSService {
 
       const smsConfig = configDoc.sectionData.sms;
 
+      // ✅ Select correct provider config
       let providerConfig: any;
       if (smsConfig.smsProvider?.toLowerCase() === 'msg91') {
-        providerConfig = { ...smsConfig.msg91, smsProvider: 'msg91' };
+        providerConfig = {
+          ...smsConfig.msg91,
+          smsProvider: 'msg91',
+          type: smsConfig.type,
+        };
       } else if (smsConfig.smsProvider?.toLowerCase() === 'twilio') {
-        providerConfig = { ...smsConfig.twilio, smsProvider: 'twilio' };
+        providerConfig = {
+          ...smsConfig.twilio,
+          smsProvider: 'twilio',
+          type: smsConfig.type,
+        };
       } else {
         throw new InternalServerErrorException(
           `Unsupported SMS provider: ${smsConfig.smsProvider}`,
@@ -263,3 +269,4 @@ export class SMSService {
     }
   }
 }
+
