@@ -10,18 +10,14 @@ export class JwtService {
 
   async verifyAccessToken(token: string): Promise<any> {
     try {
-      console.log("verifyAccessToken 1");
 
       const decoded = verify(token, this.JWT_SECRET);
-      console.log("verifyAccessToken 2");
 
-      // const isBlacklisted = await this.redisService.isTokenBlacklisted(token);
-      console.log("verifyAccessToken 3");
+      const isBlacklisted = await this.redisService.isTokenBlacklisted(token);
 
-      // if (isBlacklisted) {
-      //   return null;
-      // }
-      console.log("verifyAccessToken 4");
+      if (isBlacklisted) {
+        return null;
+      }
 
       return decoded;
     } catch (err) {
