@@ -132,12 +132,14 @@ export class RegisterLoginService {
   // ===== LOGIN (OTP) =====
   async loginUser(dto: any) {
     const { appName, name, type } = dto;
+    console.log("login dto...",dto)
     if (!appName) throw new BadRequestException('appName is required');
     if (type === 'otp' && !name)
       throw new BadRequestException('Name (mobile/email) is required');
 
     try {
       await this.databaseService.getAppDB(appName);
+      console.log("login dto...",appName)
 
       // Send OTP
       await this.otpService.sendOtp(name, 4, 2, appName);
@@ -151,6 +153,7 @@ export class RegisterLoginService {
   // ===== VERIFY OTP =====
   async verifyOtp(dto: any) {
     const { appName, email, name, otp } = dto;
+    console.log("verify dto...",dto)
     if (!appName || (!email && !name) || !otp) {
       throw new BadRequestException('appName, email/name, and otp are required');
     }

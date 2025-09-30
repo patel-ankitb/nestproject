@@ -57,6 +57,7 @@ export class DatabaseService implements OnModuleDestroy {
 
   async getDbConfigFromKey(key: string) {
     const configConn = await this.getConnection(this.BASE_URI, this.CONFIG_DB);
+    console.log("nnnn...",configConn)
     const config = await configConn.collection('appconfigs').findOne({
       'sectionData.appconfigs.key': key,
     });
