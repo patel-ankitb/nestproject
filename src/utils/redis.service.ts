@@ -8,6 +8,8 @@ export class RedisService {
 
   constructor() {
   console.log("RedisService 1");
+try{
+
 
     this.redisClient = createClient({
       url: `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`,
@@ -18,6 +20,12 @@ export class RedisService {
     this.redisClient.connect().catch((err) => {
       this.logger.error('Failed to connect to Redis', err);
     });
+    console.log("RedisService 2.1");
+
+  }
+    catch(err){
+      console.log(err);
+        }
   }
 
   async isTokenBlacklisted(token: string): Promise<boolean> {
@@ -27,6 +35,7 @@ export class RedisService {
   console.log("RedisService 4");
 
     return result === 'blacklisted';
+  
   }
 
   async onModuleDestroy() {
