@@ -17,7 +17,7 @@ export class ConfigurationsController {
       if (error instanceof HttpException) {
         throw error;
       }
-      throw new HttpException('Error fetching configurations', HttpStatus.INTERNAL_SERVER_ERROR);
+      throw new HttpException({success:false, message:'Error fetching configurations', statusCode:HttpStatus.UNAUTHORIZED}, HttpStatus.INTERNAL_SERVER_ERROR);
     }
   }
 }
