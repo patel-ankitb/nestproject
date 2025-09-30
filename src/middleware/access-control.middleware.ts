@@ -25,13 +25,15 @@ export class AccessControlMiddleware implements NestMiddleware {
         tokenParts.length === 2 && tokenParts[0] === 'Bearer'
           ? tokenParts[1]
           : token;
+          console.log("middalware called -1");
 
       const decoded = await this.jwtService.verifyAccessToken(actualToken);
+console.log("middalware called");
       
       if (!decoded) {
         throw new HttpException({success:false, message:'Invalid token.', statusCode:HttpStatus.UNAUTHORIZED},HttpStatus.UNAUTHORIZED);
       }
-console.log("middalware called");
+console.log("middalware called 0");
 
       const { userId, roleId } = decoded;
 
