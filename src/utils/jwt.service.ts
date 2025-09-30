@@ -15,12 +15,12 @@ export class JwtService {
       const decoded = verify(token, this.JWT_SECRET);
       console.log("verifyAccessToken 2");
 
-      const isBlacklisted = await this.redisService.isTokenBlacklisted(token);
+      // const isBlacklisted = await this.redisService.isTokenBlacklisted(token);
       console.log("verifyAccessToken 3");
 
-      if (isBlacklisted) {
-        return null;
-      }
+      // if (isBlacklisted) {
+      //   return null;
+      // }
       console.log("verifyAccessToken 4");
 
       return decoded;
