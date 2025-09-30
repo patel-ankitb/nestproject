@@ -183,6 +183,21 @@ export class DatabaseService implements OnModuleDestroy {
     // Ensure function always either returns a Db or throws, satisfy TypeScript control flow analysis.
     throw new InternalServerErrorException(`Failed to connect to app DB '${dbName}' after ${retries} attempts`);
   }
+
+  private async connect() {
+    try {
+      await this.client.connect();
+    } catch (error) {
+      throw new InternalServerErrorException('Failed to connect to MongoDB');
+    }
+  }
+
+  getDB(dbName: string) {
+    if (!this.client) {
+      throw new InternalServerErrorException('Database not connected');
+    }
+    return this.client.db(dbName);
+  }
 }
 
 
