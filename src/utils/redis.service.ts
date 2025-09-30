@@ -7,19 +7,35 @@ export class RedisService {
   private readonly logger = new Logger(RedisService.name);
 
   constructor() {
+  console.log("RedisService 1");
+try{
+
+
     this.redisClient = createClient({
       url: `redis://${process.env.REDIS_HOST || 'localhost'}:${process.env.REDIS_PORT || 6379}`,
       password: process.env.REDIS_PASSWORD || undefined,
     });
+    console.log("RedisService 2");
 
     this.redisClient.connect().catch((err) => {
       this.logger.error('Failed to connect to Redis', err);
     });
+    console.log("RedisService 2.1");
+
+  }
+    catch(err){
+      console.log(err);
+        }
   }
 
   async isTokenBlacklisted(token: string): Promise<boolean> {
+  console.log("RedisService 3");
+
     const result = await this.redisClient.get(token);
+  console.log("RedisService 4");
+
     return result === 'blacklisted';
+  
   }
 
   async onModuleDestroy() {
