@@ -13,11 +13,11 @@ export class AppConfigService {
     const appConfig = await mainDb.collection('custom_apps').findOne({ appnm: appName });
 
     if (!appConfig) {
-      throw new NotFoundException({success:false, message:'App configuration not found in apps. Register the app!'});
+      throw new NotFoundException('App configuration not found in apps. Register the app!');
     }
 
     if (!appConfig.isSub) {
-      throw new ForbiddenException({success:false, message:'App subscription is inactive.'});
+      throw new ForbiddenException('App subscription is inactive.');
     }
 
     const appDb = await this.mongoDBService.getAppDB(appName);
@@ -26,7 +26,7 @@ export class AppConfigService {
     const sidebarConfig = await appDb.collection('schema').findOne({ code: 'SIDEBAR_CONFIG' });
 
     if (!routesConfig || !sidebarConfig) {
-      throw new NotFoundException({success:false, message:'Routes or Sidebar configuration not found'});
+      throw new NotFoundException('Routes or Sidebar configuration not found');
     }
 
     return {
