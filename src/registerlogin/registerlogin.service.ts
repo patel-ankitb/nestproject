@@ -35,18 +35,31 @@ export class RegisterLoginService {
     return { accessToken, refreshToken };
   }
 
+  // ===== Unified OTP Sender =====
+  private async sendOtp(uniqueId: string, appName: string) {
+    const isMobile = /^\+\d{7,15}$/.test(uniqueId);
+    const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(uniqueId);
+
+    if (isMobile || isEmail) {
+      // otp.ts exposes a unified sendOtp method that handles both SMS and Email
+      return this.otpService.sendOtp(uniqueId, 4, 2, appName);
+    } else {
+      throw new BadRequestException(`Invalid mobile/email: ${uniqueId}`);
+    }
+  }
+
   // ===== SIGNUP =====
   async signupUser(dto: any) {
     const { appName, name, email, password, role, mobile = '', type } = dto;
 
     if (
       !appName ||
-      !email ||
       (!password && !['otp', 'oauth'].includes(type)) ||
-      !role
+      !role ||
+      (!email && !mobile)
     ) {
       throw new BadRequestException(
-        'appName, email, password (unless OTP/OAuth), and role are required',
+        'appName, email/mobile, password (unless OTP/OAuth), and role are required',
       );
     }
 
@@ -59,12 +72,12 @@ export class RegisterLoginService {
       // Check existing user
       const existingUser = await usersCollection.findOne({
         $or: [
-          { 'sectionData.appuser.name': email.toLowerCase() },
-          { 'sectionData.appuser.email': email.toLowerCase() },
+          { 'sectionData.appuser.email': email?.toLowerCase() },
+          { 'sectionData.appuser.mobile': mobile },
         ],
       });
       if (existingUser)
-        throw new BadRequestException('User with this email already exists');
+        throw new BadRequestException('User with this email or mobile already exists');
 
       // Check role exists
       const assignedRole = await rolesCollection.findOne({ _id: role });
@@ -80,9 +93,9 @@ export class RegisterLoginService {
         _id: Date.now().toString(),
         sectionData: {
           appuser: {
-            name: email.toLowerCase(),
+            name: email?.toLowerCase() || mobile,
             legalname: name,
-            email: email.toLowerCase(),
+            email: email?.toLowerCase(),
             mobile,
             role: assignedRole._id,
             password: hashedPassword,
@@ -94,7 +107,7 @@ export class RegisterLoginService {
 
       // ===== OTP Signup =====
       if (type === 'otp') {
-        await this.otpService.sendOtp(email.toLowerCase(), 4, 2, appName);
+        await this.sendOtp(email || mobile, appName);
         return { success: true, message: 'Signup successful, OTP required' };
       }
 
@@ -132,17 +145,15 @@ export class RegisterLoginService {
   // ===== LOGIN (OTP) =====
   async loginUser(dto: any) {
     const { appName, name, type } = dto;
-    console.log("login dto...",dto)
     if (!appName) throw new BadRequestException('appName is required');
     if (type === 'otp' && !name)
       throw new BadRequestException('Name (mobile/email) is required');
 
     try {
       await this.databaseService.getAppDB(appName);
-      console.log("login dto...",appName)
 
       // Send OTP
-      await this.otpService.sendOtp(name, 4, 2, appName);
+      await this.sendOtp(name, appName);
 
       return { success: true, message: 'OTP sent successfully', userId: name };
     } catch (err: any) {
@@ -153,7 +164,6 @@ export class RegisterLoginService {
   // ===== VERIFY OTP =====
   async verifyOtp(dto: any) {
     const { appName, email, name, otp } = dto;
-    console.log("verify dto...",dto)
     if (!appName || (!email && !name) || !otp) {
       throw new BadRequestException('appName, email/name, and otp are required');
     }

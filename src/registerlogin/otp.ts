@@ -1,4 +1,3 @@
-// otp.service.ts
 import {
   Injectable,
   InternalServerErrorException,
@@ -9,6 +8,7 @@ import {
 import * as crypto from 'crypto';
 import { RegisterLoginService } from './registerlogin.service';
 import { EmailService } from './emailservice';
+import { SMSService } from './smsservicce';
 import { DatabaseService } from '../databases/database.service';
 import { Db } from 'mongodb';
 
@@ -18,7 +18,8 @@ export class OtpService {
     @Inject(forwardRef(() => RegisterLoginService))
     private readonly registerLoginService: RegisterLoginService,
     private readonly emailService: EmailService,
-    private readonly databaseService: DatabaseService, // Inject DatabaseService
+    private readonly smsService: SMSService,
+    private readonly databaseService: DatabaseService,
   ) {}
 
   private generateOtp(length = 4): string {
@@ -35,8 +36,10 @@ export class OtpService {
     }
   }
 
+  // ===== Unified OTP sender =====
   async sendOtp(uniqueId: string, otpLength = 4, expiresInMinutes = 2, appName: string) {
     try {
+      // Generate OTP (fixed for demo emails)
       const otp: string = uniqueId === 'hanademo@mail.com' ? '9999' : this.generateOtp(otpLength);
 
       const db = await this.getDb(appName);
@@ -45,7 +48,7 @@ export class OtpService {
       // Ensure TTL index exists
       await otpCollection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-      // Store OTP
+      // Store OTP in DB
       const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
       await otpCollection.insertOne({
         uniqueId,
@@ -55,8 +58,19 @@ export class OtpService {
         createdAt: new Date(),
       });
 
-      // Send OTP via email
-      await this.emailService.sendOtpEmail(uniqueId, otp);
+      // Determine channel: mobile vs email
+      const isMobile = /^\+\d{7,15}$/.test(uniqueId);
+      const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(uniqueId);
+
+      if (isMobile) {
+        // Send OTP via SMS
+        await this.smsService.sendMessage(appName, process.env.MONGO_URI || '', appName, 'smsConfigId', uniqueId, `Your OTP is: ${otp}`, 'otp');
+      } else if (isEmail) {
+        // Send OTP via Email
+        await this.emailService.sendOtpEmail(uniqueId, otp);
+      } else {
+        throw new BadRequestException(`Invalid mobile/email: ${uniqueId}`);
+      }
 
       return { success: true, message: `OTP sent to ${uniqueId}` };
     } catch (err: any) {
@@ -64,6 +78,7 @@ export class OtpService {
     }
   }
 
+  // ===== OTP verification =====
   async verifyOtp(uniqueId: string, otp: string, appName: string) {
     try {
       const db = await this.getDb(appName);
@@ -71,12 +86,8 @@ export class OtpService {
 
       const record = await otpCollection.findOne({ uniqueId, appName });
 
-      if (!record) {
-        throw new BadRequestException('OTP has expired or not found');
-      }
-      if (record.otp !== otp) {
-        throw new BadRequestException('Invalid OTP');
-      }
+      if (!record) throw new BadRequestException('OTP has expired or not found');
+      if (record.otp !== otp) throw new BadRequestException('Invalid OTP');
 
       // Delete OTP after verification
       await otpCollection.deleteOne({ _id: record._id });
