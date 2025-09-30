@@ -146,6 +146,7 @@ export class DatabaseService implements OnModuleDestroy {
 
 
     const appDb = await this.connectToAppDB(cn_str, db);
+    console.log("appDb...",appDb)
     this.appConnectionsCache[appName] = appDb;
     return appDb;
   }
