@@ -12,7 +12,11 @@ export class SaveConfigurationsController {
     @Body() saveConfigDto: SaveConfigDto,
   ) {
     try {
+      console.log("save config");
+      
       await this.saveConfigurationsService.saveConfigurations(appName, saveConfigDto);
+      console.log("saved config");
+
       return {
         success: true,
         message: 'Configurations saved successfully',
