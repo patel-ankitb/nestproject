@@ -1,3 +1,4 @@
+// otp.service.ts
 import {
   Injectable,
   InternalServerErrorException,
@@ -8,6 +9,8 @@ import {
 import * as crypto from 'crypto';
 import { RegisterLoginService } from './registerlogin.service';
 import { EmailService } from './emailservice';
+import { DatabaseService } from '../databases/database.service';
+import { Db } from 'mongodb';
 
 @Injectable()
 export class OtpService {
@@ -15,6 +18,7 @@ export class OtpService {
     @Inject(forwardRef(() => RegisterLoginService))
     private readonly registerLoginService: RegisterLoginService,
     private readonly emailService: EmailService,
+    private readonly databaseService: DatabaseService, // Inject DatabaseService
   ) {}
 
   private generateOtp(length = 4): string {
@@ -23,35 +27,25 @@ export class OtpService {
       .toString();
   }
 
-  async sendOtp(
-    uniqueId: string,
-    otpLength = 4,
-    expiresInMinutes = 2,
-    appName: string,
-  ) {
+  private async getDb(appName: string): Promise<Db> {
     try {
-      // Demo user gets fixed OTP
-      const otp: string =
-        uniqueId === 'hanademo@mail.com'
-          ? '9999'
-          : this.generateOtp(otpLength);
+      return await this.databaseService.getAppDB(appName);
+    } catch (err) {
+      throw new InternalServerErrorException('Unable to resolve database for app');
+    }
+  }
 
-      const { cn_str, dbName } =
-        await this.registerLoginService.resolveAppConfig(appName);
-      const conn = await this.registerLoginService.getConnection(
-        cn_str,
-        dbName,
-      );
-      const db = conn.useDb(dbName);
+  async sendOtp(uniqueId: string, otpLength = 4, expiresInMinutes = 2, appName: string) {
+    try {
+      const otp: string = uniqueId === 'hanademo@mail.com' ? '9999' : this.generateOtp(otpLength);
+
+      const db = await this.getDb(appName);
       const otpCollection = db.collection('otp');
 
-      // Ensure TTL index exists (expiresAt field)
-      await otpCollection.createIndex(
-        { expiresAt: 1 },
-        { expireAfterSeconds: 0 },
-      );
+      // Ensure TTL index exists
+      await otpCollection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-      // Store OTP with expiry
+      // Store OTP
       const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
       await otpCollection.insertOne({
         uniqueId,
@@ -72,13 +66,7 @@ export class OtpService {
 
   async verifyOtp(uniqueId: string, otp: string, appName: string) {
     try {
-      const { cn_str, dbName } =
-        await this.registerLoginService.resolveAppConfig(appName);
-      const conn = await this.registerLoginService.getConnection(
-        cn_str,
-        dbName,
-      );
-      const db = conn.useDb(dbName);
+      const db = await this.getDb(appName);
       const otpCollection = db.collection('otp');
 
       const record = await otpCollection.findOne({ uniqueId, appName });
@@ -90,7 +78,7 @@ export class OtpService {
         throw new BadRequestException('Invalid OTP');
       }
 
-      // Delete OTP after success
+      // Delete OTP after verification
       await otpCollection.deleteOne({ _id: record._id });
 
       return { success: true, message: 'OTP verified successfully' };

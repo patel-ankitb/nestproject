@@ -8,70 +8,17 @@ import {
 } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 import * as jwt from 'jsonwebtoken';
-import mongoose, { Connection } from 'mongoose';
 import { OtpService } from './otp';
 import { DatabaseService } from '../databases/database.service';
-
-interface AppConfigType {
-  cn_str: string;
-  dbName: string;
-}
+import { Db } from 'mongodb';
 
 @Injectable()
 export class RegisterLoginService {
-  private connections: Map<string, Connection> = new Map();
-
   constructor(
     @Inject(forwardRef(() => OtpService))
     private readonly otpService: OtpService,
     private readonly databaseService: DatabaseService,
   ) {}
-
-  // ===== DB Connection Handling =====
-  async getConnection(cn_str: string, dbName: string): Promise<Connection> {
-    const cacheKey = `${cn_str}_${dbName}`;
-    if (this.connections.has(cacheKey)) return this.connections.get(cacheKey)!;
-
-    try {
-      const conn = await mongoose
-        .createConnection(cn_str, { dbName })
-        .asPromise();
-      console.log(`Connected to DB: ${dbName}`);
-      this.connections.set(cacheKey, conn);
-      return conn;
-    } catch (err: any) {
-      throw new BadRequestException(`Failed to connect: ${err.message}`);
-    }
-  }
-
-  // ===== Resolve App Config =====
-  async resolveAppConfig(appName: string): Promise<AppConfigType> {
-    try {
-      const db = await this.databaseService.getAppDB(appName);
-      if (!db)
-        throw new BadRequestException(
-          'Invalid API key or database config not found',
-        );
-
-      const dbName =
-        typeof db === 'string' ? db : (db as any).db || (db as any).databaseName;
-
-      if (!dbName) {
-        throw new BadRequestException(
-          'Database name missing or invalid in configuration',
-        );
-      }
-
-      return {
-        cn_str: (db as any).cn_str,
-        dbName,
-      };
-    } catch (err: any) {
-      throw new BadRequestException(
-        `App config error for ${appName}: ${err.message}`,
-      );
-    }
-  }
 
   // ===== JWT Tokens =====
   private generateTokens(userId: string, roleId: string, tokenVersion = 1) {
@@ -104,9 +51,7 @@ export class RegisterLoginService {
     }
 
     try {
-      const { cn_str, dbName } = await this.resolveAppConfig(appName);
-      const conn = await this.getConnection(cn_str, dbName);
-      const db = conn.useDb(dbName);
+      const db: Db = await this.databaseService.getAppDB(appName);
       const usersCollection = db.collection<any>('appuser');
       const rolesCollection = db.collection<any>('approle');
       const logsCollection = db.collection<any>('login_logs');
@@ -192,7 +137,7 @@ export class RegisterLoginService {
       throw new BadRequestException('Name (mobile/email) is required');
 
     try {
-      await this.resolveAppConfig(appName);
+      await this.databaseService.getAppDB(appName);
 
       // Send OTP
       await this.otpService.sendOtp(name, 4, 2, appName);
