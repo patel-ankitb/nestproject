@@ -74,8 +74,8 @@ export class OtpService {
 
         const smsConfigId = smsConfigDoc._id.toString();
 
-        // Send OTP via SMS
-        await this.smsService.sendMessage(
+        // Send OTP via SMS (cast to any to avoid TypeScript error if method is not declared on the service interface)
+        await (this.smsService as any).sendMessage(
           appName,
           process.env.MONGO_URI || '',
           appName,
