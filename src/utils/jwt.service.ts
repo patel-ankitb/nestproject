@@ -13,11 +13,11 @@ export class JwtService {
 
       const decoded = verify(token, this.JWT_SECRET);
 
-      // const isBlacklisted = await this.redisService.isTokenBlacklisted(token);
+      const isBlacklisted = await this.redisService.isTokenBlacklisted(token);
 
-      // if (isBlacklisted) {
-      //   return null;
-      // }
+      if (isBlacklisted) {
+        return null;
+      }
 
       return decoded;
     } catch (err) {
