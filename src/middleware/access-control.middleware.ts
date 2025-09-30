@@ -25,15 +25,12 @@ export class AccessControlMiddleware implements NestMiddleware {
         tokenParts.length === 2 && tokenParts[0] === 'Bearer'
           ? tokenParts[1]
           : token;
-          console.log("middalware called -1");
 
       const decoded = await this.jwtService.verifyAccessToken(actualToken);
-console.log("middalware called");
       
       if (!decoded) {
         throw new HttpException({success:false, message:'Invalid token.', statusCode:HttpStatus.UNAUTHORIZED},HttpStatus.UNAUTHORIZED);
       }
-console.log("middalware called 0");
 
       const { userId, roleId } = decoded;
 
@@ -54,7 +51,6 @@ console.log("middalware called 0");
       if (role.sectionData.approle.role === 'superadmin') {
         return next();
       }
-      console.log("middalware called 2");
 
       const accessControlList = {
         'upload image': ['canAdd', 'canEdit'],
@@ -71,7 +67,6 @@ console.log("middalware called 0");
       if (!moduleAccess) {
         throw new HttpException({success:false, message:'Module access denied.', statusCode:HttpStatus.UNAUTHORIZED}, HttpStatus.FORBIDDEN);
       }
-      console.log("middalware called 3");
 
       if (accessControlList[action]) {
         const permissions = accessControlList[action];
@@ -88,14 +83,12 @@ console.log("middalware called 0");
       } else {
         throw new HttpException({success:false, message:'Invalid action.', statusCode:HttpStatus.UNAUTHORIZED}, HttpStatus.FORBIDDEN);
       }
-      console.log("middalware called 4");
 
       next();
     } catch (error) {
-      // if (error instanceof HttpException) {
-      //   throw error;
-      // }
-console.log(error);
+      if (error instanceof HttpException) {
+        throw error;
+      }
 
       throw new HttpException({success:false, message:'Invalid token.', statusCode:HttpStatus.UNAUTHORIZED}, HttpStatus.UNAUTHORIZED);
     }
