@@ -1,11 +1,16 @@
-// src/registerlogin/registerlogin.module.ts
-import { Module } from '@nestjs/common';
-// import { RegisterLoginController } from '.';
+import { Module, forwardRef } from '@nestjs/common';
 import { RegisterLoginService } from './registerlogin.service';
+import { OtpService } from './otp';
 import { RegisterLoginController } from './registerlogin.controller';
+import { DatabaseService } from 'src/databases/database.service';
 
 @Module({
+  imports: [
+    // forwardRef resolves circular dependency between RegisterLoginService <-> OtpService
+    forwardRef(() => RegisterLoginModule),
+  ],
+  providers: [RegisterLoginService, OtpService,DatabaseService],
+  exports: [RegisterLoginService, OtpService],
   controllers: [RegisterLoginController],
-  providers: [RegisterLoginService],
 })
 export class RegisterLoginModule {}

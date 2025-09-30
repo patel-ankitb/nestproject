@@ -1,130 +1,78 @@
-// import { Injectable } from '@nestjs/common';
-// import { InjectRedis, Redis } from '@nestjs-modules/ioredis';
-// import * as crypto from 'crypto';
-// import { EmailService } from './email.service'; // Assuming an EmailService exists
-// import { AppDatabaseService } from './app-database.service'; // Service for DB connection
-// import { SMSService } from './sms.service'; // SMS service for sending OTP via SMS
-// import { RegisterLoginService } from './registerlogin.service'; // Service for app config resolution
+import { Injectable, InternalServerErrorException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
+import * as crypto from 'crypto';
+import mongoose from 'mongoose';
+import { RegisterLoginService } from './registerlogin.service';
 
-// @Injectable()
-// export class OtpService {
-//   constructor(
-//     @InjectRedis() private readonly redisClient: Redis,
-//     private readonly emailService: EmailService,
-//     private readonly appDatabaseService: AppDatabaseService,
-//     private readonly smsService: SMSService,
-//     private readonly registerLoginService: RegisterLoginService,
-//   ) {}
+@Injectable()
+export class OtpService {
+  constructor(
+    @Inject(forwardRef(() => RegisterLoginService))
+    private readonly registerLoginService: RegisterLoginService,
+  ) {}
 
-//   private generateOtp(length: number = 6): string {
-//     return crypto
-//       .randomInt(Math.pow(10, length - 1), Math.pow(10, length))
-//       .toString();
-//   }
+  private generateOtp(length: number = 6): string {
+    return crypto
+      .randomInt(Math.pow(10, length - 1), Math.pow(10, length))
+      .toString();
+  }
 
-//   async sendOtp(
-//     uniqueId: string,
-//     otpLength: number = 6,
-//     expiresInMinutes: number = 2,
-//     appName: string,
-//     type: number = 2, // 1 for SMS, 2 for Email
-//   ): Promise<{ success: boolean; message: string }> {
-//     let otp: string;
+  // ===== SEND OTP =====
+  async sendOtp(uniqueId: string, otpLength: number, expiresInMinutes: number, appName: string, type: number) {
+    try {
+      const otp = this.generateOtp(otpLength);
 
-//     // Check if the username matches 'hanademo@mail.com' and set OTP to 9999
-//     if (uniqueId === 'hanademo@mail.com') {
-//       otp = '9999'; // Fixed OTP
-//     } else {
-//       otp = this.generateOtp(otpLength); // Generate OTP for other users
-//     }
+      const { cn_str, dbName } = await this.registerLoginService.resolveAppConfig(appName);
+      const conn = await mongoose.createConnection(cn_str, { dbName }).asPromise();
+      const db = conn.useDb(dbName);
 
-//     // Get database connection and app configuration
-//     const { connectionString, dbName } =
-//       await this.registerLoginService.resolveAppConfig(appName);
-//     const appDb = await this.appDatabaseService.getConnection(
-//       connectionString,
-//       dbName,
-//     );
+      const otpCollection = db.collection('otp_logs');
 
-//     if (type === 2) {
-//       // Email OTP
-//       const smtpCollection = appDb.collection('smtp');
-//       const smtp = await smtpCollection.findOne({});
+      await otpCollection.insertOne({
+        uniqueId,
+        appName,
+        otp,
+        createdAt: new Date(),
+        expireAt: new Date(Date.now() + expiresInMinutes * 60 * 1000),
+      });
 
-//       let mailOptions: {
-//         from: string;
-//         to: string;
-//         subject: string;
-//         text: string;
-//       };
+      console.log(`OTP for ${uniqueId}: ${otp}`); // For testing
+      return { success: true, message: 'OTP sent successfully' };
+    } catch (err: any) {
+      throw new InternalServerErrorException(err.message);
+    }
+  }
 
-//       if (smtp && smtp.sectionData && smtp.sectionData.smtpConfig) {
-//         const smtpConfig = sms.sectionData.smtpConfig;
-//         const fromName = smtpConfig.name || '';
-//         const fromEmail = smtpConfig.email || process.env.EMAIL_USER;
-//         const fromSubject = smtpConfig.sub || `${appName} OTP Verification`;
+  // ===== VERIFY OTP =====
+  async verifyOtp(uniqueId: string, otp: string, appName: string) {
+    try {
+      const { cn_str, dbName } = await this.registerLoginService.resolveAppConfig(appName);
+      const conn = await mongoose.createConnection(cn_str, { dbName }).asPromise();
+      const db = conn.useDb(dbName);
 
-//         mailOptions = {
-//           from: `"${fromName}" <${fromEmail}>`,
-//           to: uniqueId,
-//           subject: fromSubject,
-//           text: `Your OTP is ${otp}. It is valid for ${expiresInMinutes} minutes.`,
-//         };
-//       } else {
-//         mailOptions = {
-//           from: process.env.EMAIL_USER,
-//           to: uniqueId,
-//           subject: `${appName} OTP Verification`,
-//           text: `Your OTP is ${otp}. It is valid for ${expiresInMinutes} minutes.`,
-//         };
-//       }
+      const otpCollection = db.collection('otp_logs');
 
-//       await this.emailService.sendEmail(mailOptions);
-//     } else if (type === 1) {
-//       // SMS OTP
-//       const smsCollection = appDb.collection('sms');
-//       const smsConfig = await smsCollection.findOne({});
+      const now = new Date();
+      const record = await otpCollection.findOne({
+        uniqueId,
+        appName,
+        expireAt: { $gt: now }, // Check if OTP is not expired
+      });
 
-//       if (!smsConfig) {
-//         throw new Error('SMS configuration not found');
-//       }
+      if (!record) {
+        throw new BadRequestException('OTP not found or expired');
+      }
 
-//       await this.smsService.sendMessage(
-//         appName,
-//         connectionString,
-//         dbName,
-//         smsConfig._id.toString(),
-//         uniqueId, // Assuming uniqueId is a phone number for SMS
-//         otp,
-//         'otp',
-//       );
-//     } else {
-//       throw new Error('Invalid OTP delivery type');
-//     }
+      if (record.otp !== otp) {
+        throw new BadRequestException('Invalid OTP');
+      }
 
-//     // Store OTP in Redis
-//     const redisKey = `${appName}:otp:${uniqueId}`;
-//     await this.redisClient.set(redisKey, otp, 'EX', expiresInMinutes * 60);
+      // Delete OTP after successful verification
+      await otpCollection.deleteOne({ _id: record._id });
 
-//     return { success: true, message: `OTP sent to ${uniqueId} via ${type === 1 ? 'SMS' : 'Email'}` };
-//   }
-
-//   async verifyOtp(
-//     uniqueId: string,
-//     otp: string,
-//     appName: string,
-//   ): Promise<{ success: boolean; message: string }> {
-//     const redisKey = `${appName}:otp:${uniqueId}`;
-//     const storedOtp = await this.redisClient.get(redisKey);
-
-//     if (!storedOtp) {
-//       return { success: false, message: 'OTP has expired or not found' };
-//     }
-
-//     if (storedOtp !== otp) {
-//       return { success: false, message: 'Invalid OTP' };
-//     }
-
-//     return { success: true, message: 'OTP verified successfully' };
-//   }
-// }
+      return { success: true, message: 'OTP verified successfully' };
+    } catch (err: any) {
+      if (err.status === 400) throw err; // pass through BadRequestException
+      throw new InternalServerErrorException(err.message);
+    }
+  }
+}
