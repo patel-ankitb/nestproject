@@ -1,77 +1,99 @@
+// otp.service.ts
 import { Injectable, InternalServerErrorException, BadRequestException, Inject, forwardRef } from '@nestjs/common';
 import * as crypto from 'crypto';
-import mongoose from 'mongoose';
+import { RedisClientType } from 'redis';
 import { RegisterLoginService } from './registerlogin.service';
+import { EmailService } from './emailservice';
+import { createClient } from 'redis';
 
 @Injectable()
 export class OtpService {
+  private redisClient: RedisClientType;
+
   constructor(
     @Inject(forwardRef(() => RegisterLoginService))
     private readonly registerLoginService: RegisterLoginService,
-  ) {}
-
-  private generateOtp(length: number = 6): string {
-    return crypto
-      .randomInt(Math.pow(10, length - 1), Math.pow(10, length))
-      .toString();
+    private readonly emailService: EmailService,
+  ) {
+    this.redisClient = createClient({
+      url: process.env.REDIS_URL || 'redis://localhost:6379',
+    });
+    this.redisClient.connect().catch(console.error);
   }
 
-  // ===== SEND OTP =====
-  async sendOtp(uniqueId: string, otpLength: number, expiresInMinutes: number, appName: string, type: number) {
+  private generateOtp(length = 4): string {
+    return crypto.randomInt(Math.pow(10, length - 1), Math.pow(10, length)).toString();
+  }
+
+  async sendOtp(uniqueId: string, otpLength = 4, expiresInMinutes = 2, appName: string) {
     try {
-      const otp = this.generateOtp(otpLength);
+      let otp: string;
 
+      // Fixed OTP for certain users
+      if (uniqueId === 'hanademo@mail.com') {
+        otp = '9999';
+      } else {
+        otp = this.generateOtp(otpLength);
+      }
+
+      // Resolve app config (if needed for email)
       const { cn_str, dbName } = await this.registerLoginService.resolveAppConfig(appName);
-      const conn = await mongoose.createConnection(cn_str, { dbName }).asPromise();
+
+      // Get SMTP config from DB
+      const conn = await this.registerLoginService.getConnection(cn_str, dbName);
       const db = conn.useDb(dbName);
+      const smtpCollection = db.collection('smtp');
+      const smtp = await smtpCollection.findOne({});
 
-      const otpCollection = db.collection('otp_logs');
+      let mailOptions: any;
+      if (smtp?.sectionData?.smtpConfig) {
+        const smtpConfig = smtp.sectionData.smtpConfig;
+        mailOptions = {
+          from: `"${smtpConfig.name || ''}" <${smtpConfig.email || process.env.EMAIL_USER}>`,
+          to: uniqueId,
+          subject: smtpConfig.sub || `${appName} OTP Verification`,
+          text: `Your OTP is ${otp}. It is valid for ${expiresInMinutes} minutes.`,
+        };
+      } else {
+        mailOptions = {
+          from: process.env.EMAIL_USER,
+          to: uniqueId,
+          subject: `${appName} OTP Verification`,
+          text: `Your OTP is ${otp}. It is valid for ${expiresInMinutes} minutes.`,
+        };
+      }
 
-      await otpCollection.insertOne({
-        uniqueId,
-        appName,
-        otp,
-        createdAt: new Date(),
-        expireAt: new Date(Date.now() + expiresInMinutes * 60 * 1000),
-      });
+      // Send email
+      await this.emailService.sendOtpEmail(uniqueId, otp);
 
-      console.log(`OTP for ${uniqueId}: ${otp}`); // For testing
-      return { success: true, message: 'OTP sent successfully' };
+      // Store OTP in Redis
+      const redisKey = `${appName}:otp:${uniqueId}`;
+      await this.redisClient.set(redisKey, otp, { EX: expiresInMinutes * 60 });
+
+      return { success: true, message: `OTP sent to ${uniqueId}` };
     } catch (err: any) {
       throw new InternalServerErrorException(err.message);
     }
   }
 
-  // ===== VERIFY OTP =====
   async verifyOtp(uniqueId: string, otp: string, appName: string) {
     try {
-      const { cn_str, dbName } = await this.registerLoginService.resolveAppConfig(appName);
-      const conn = await mongoose.createConnection(cn_str, { dbName }).asPromise();
-      const db = conn.useDb(dbName);
+      const redisKey = `${appName}:otp:${uniqueId}`;
+      const storedOtp = await this.redisClient.get(redisKey);
 
-      const otpCollection = db.collection('otp_logs');
-
-      const now = new Date();
-      const record = await otpCollection.findOne({
-        uniqueId,
-        appName,
-        expireAt: { $gt: now }, // Check if OTP is not expired
-      });
-
-      if (!record) {
-        throw new BadRequestException('OTP not found or expired');
+      if (!storedOtp) {
+        throw new BadRequestException('OTP has expired or not found');
       }
-
-      if (record.otp !== otp) {
+      if (storedOtp !== otp) {
         throw new BadRequestException('Invalid OTP');
       }
 
-      // Delete OTP after successful verification
-      await otpCollection.deleteOne({ _id: record._id });
+      // Delete OTP after verification
+      await this.redisClient.del(redisKey);
 
       return { success: true, message: 'OTP verified successfully' };
     } catch (err: any) {
-      if (err.status === 400) throw err; // pass through BadRequestException
+      if (err.status === 400) throw err;
       throw new InternalServerErrorException(err.message);
     }
   }
