@@ -1,4 +1,3 @@
-// registerlogin.service.ts
 import {
   Injectable,
   BadRequestException,
@@ -32,8 +31,11 @@ export class RegisterLoginService {
   async getConnection(cn_str: string, dbName: string): Promise<Connection> {
     const cacheKey = `${cn_str}_${dbName}`;
     if (this.connections.has(cacheKey)) return this.connections.get(cacheKey)!;
+
     try {
-      const conn = await mongoose.createConnection(cn_str, { dbName }).asPromise();
+      const conn = await mongoose
+        .createConnection(cn_str, { dbName })
+        .asPromise();
       console.log(`Connected to DB: ${dbName}`);
       this.connections.set(cacheKey, conn);
       return conn;
@@ -42,29 +44,34 @@ export class RegisterLoginService {
     }
   }
 
-// ===== Resolve App Config =====
-async resolveAppConfig(appName: string): Promise<AppConfigType> {
-  try {
-    const db = await this.databaseService.getAppDB(appName);
-    if (!db) throw new BadRequestException('Invalid API key or database config not found');
+  // ===== Resolve App Config =====
+  async resolveAppConfig(appName: string): Promise<AppConfigType> {
+    try {
+      const db = await this.databaseService.getAppDB(appName);
+      if (!db)
+        throw new BadRequestException(
+          'Invalid API key or database config not found',
+        );
 
-    // Ensure we have a proper database name (string) before calling getConnection
-    const dbName = typeof db === 'string'
-      ? db
-      : ((db as any).db || (db as any).databaseName);
+      const dbName =
+        typeof db === 'string' ? db : (db as any).db || (db as any).databaseName;
 
-    if (!dbName) {
-      throw new BadRequestException('Database name missing or invalid in configuration');
+      if (!dbName) {
+        throw new BadRequestException(
+          'Database name missing or invalid in configuration',
+        );
+      }
+
+      return {
+        cn_str: (db as any).cn_str,
+        dbName,
+      };
+    } catch (err: any) {
+      throw new BadRequestException(
+        `App config error for ${appName}: ${err.message}`,
+      );
     }
-
-    return { 
-      cn_str: (db as any).cn_str, 
-      dbName: dbName 
-    };
-  } catch (err: any) {
-    throw new BadRequestException(`App config error for ${appName}: ${err.message}`);
   }
-}
 
   // ===== JWT Tokens =====
   private generateTokens(userId: string, roleId: string, tokenVersion = 1) {
@@ -84,9 +91,15 @@ async resolveAppConfig(appName: string): Promise<AppConfigType> {
   // ===== SIGNUP =====
   async signupUser(dto: any) {
     const { appName, name, email, password, role, mobile = '', type } = dto;
-    if (!appName || !email || (!password && !['otp', 'oauth'].includes(type)) || !role) {
+
+    if (
+      !appName ||
+      !email ||
+      (!password && !['otp', 'oauth'].includes(type)) ||
+      !role
+    ) {
       throw new BadRequestException(
-        'appName, email, password (unless OTP or OAuth), and role are required',
+        'appName, email, password (unless OTP/OAuth), and role are required',
       );
     }
 
@@ -105,14 +118,18 @@ async resolveAppConfig(appName: string): Promise<AppConfigType> {
           { 'sectionData.appuser.email': email.toLowerCase() },
         ],
       });
-      if (existingUser) throw new BadRequestException('User with this email already exists');
+      if (existingUser)
+        throw new BadRequestException('User with this email already exists');
 
       // Check role exists
       const assignedRole = await rolesCollection.findOne({ _id: role });
       if (!assignedRole) throw new NotFoundException('Provided role not found');
 
+      // Hash password if not OTP/OAuth
       const hashedPassword =
-        password && !['otp', 'oauth'].includes(type) ? await bcrypt.hash(password, 10) : '';
+        password && !['otp', 'oauth'].includes(type)
+          ? await bcrypt.hash(password, 10)
+          : '';
 
       const newUser: any = {
         _id: Date.now().toString(),
@@ -145,7 +162,11 @@ async resolveAppConfig(appName: string): Promise<AppConfigType> {
         logs: [{ type: 'in', time: new Date() }],
       });
 
-      const { accessToken, refreshToken } = this.generateTokens(newUser._id, assignedRole._id, 1);
+      const { accessToken, refreshToken } = this.generateTokens(
+        newUser._id,
+        assignedRole._id,
+        1,
+      );
 
       return {
         success: true,
@@ -155,7 +176,7 @@ async resolveAppConfig(appName: string): Promise<AppConfigType> {
         user: {
           _id: newUser._id,
           username: newUser.sectionData.appuser.name,
-          role: assignedRole.sectionData.approle,
+          role: assignedRole.sectionData?.approle,
         },
       };
     } catch (error: any) {
@@ -167,12 +188,13 @@ async resolveAppConfig(appName: string): Promise<AppConfigType> {
   async loginUser(dto: any) {
     const { appName, name, type } = dto;
     if (!appName) throw new BadRequestException('appName is required');
-    if (type === 'otp' && !name) throw new BadRequestException('Name (mobile/email) is required');
+    if (type === 'otp' && !name)
+      throw new BadRequestException('Name (mobile/email) is required');
 
     try {
       await this.resolveAppConfig(appName);
 
-      // Send OTP via Redis + Email
+      // Send OTP
       await this.otpService.sendOtp(name, 4, 2, appName);
 
       return { success: true, message: 'OTP sent successfully', userId: name };
