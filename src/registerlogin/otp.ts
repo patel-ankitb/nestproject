@@ -39,7 +39,7 @@ export class OtpService {
   // ===== Unified OTP sender =====
   async sendOtp(uniqueId: string, otpLength = 4, expiresInMinutes = 2, appName: string) {
     try {
-      // Generate OTP (fixed for demo emails)
+      // Generate OTP (fixed for demo email)
       const otp: string = uniqueId === 'hanademo@mail.com' ? '9999' : this.generateOtp(otpLength);
 
       const db = await this.getDb(appName);
@@ -48,7 +48,7 @@ export class OtpService {
       // Ensure TTL index exists
       await otpCollection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-      // Store OTP in DB
+      // Store OTP
       const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
       await otpCollection.insertOne({
         uniqueId,
@@ -63,8 +63,27 @@ export class OtpService {
       const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(uniqueId);
 
       if (isMobile) {
+        // Fetch SMS config dynamically from DB
+        const smsConfigDoc = await db.collection('sms').findOne({
+          'sectionData.sms.smsProvider': { $exists: true },
+        });
+
+        if (!smsConfigDoc || !smsConfigDoc.sectionData?.sms) {
+          throw new InternalServerErrorException('SMS configuration not found');
+        }
+
+        const smsConfigId = smsConfigDoc._id.toString();
+
         // Send OTP via SMS
-        await this.smsService.sendMessage(appName, process.env.MONGO_URI || '', appName, 'smsConfigId', uniqueId, `Your OTP is: ${otp}`, 'otp');
+        await this.smsService.sendMessage(
+          appName,
+          process.env.MONGO_URI || '',
+          appName,
+          smsConfigId,
+          uniqueId,
+          `Your OTP is: ${otp}`,
+          'otp',
+        );
       } else if (isEmail) {
         // Send OTP via Email
         await this.emailService.sendOtpEmail(uniqueId, otp);
