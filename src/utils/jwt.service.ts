@@ -18,9 +18,9 @@ export class JwtService {
       // const isBlacklisted = await this.redisService.isTokenBlacklisted(token);
       console.log("verifyAccessToken 3");
 
-      if (isBlacklisted) {
-        return null;
-      }
+      // if (isBlacklisted) {
+      //   return null;
+      // }
       console.log("verifyAccessToken 4");
 
       return decoded;
