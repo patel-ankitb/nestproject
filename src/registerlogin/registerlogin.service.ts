@@ -42,27 +42,29 @@ export class RegisterLoginService {
     }
   }
 
-  // ===== Resolve App Config =====
-  async resolveAppConfig(appName: string): Promise<AppConfigType> {
-    try {
-      const db = await this.databaseService.getAppDB(appName);
-      if (!db) throw new NotFoundException(`App DB not found for ${appName}`);
+// ===== Resolve App Config =====
+async resolveAppConfig(appName: string): Promise<AppConfigType> {
+  try {
+    const db = await this.databaseService.getAppDB(appName);
+    if (!db) throw new BadRequestException('Invalid API key or database config not found');
 
-      const config = await db.collection('appconfigs').findOne({ appName });
-      if (!config) throw new NotFoundException(`App config not found for ${appName}`);
+    // Ensure we have a proper database name (string) before calling getConnection
+    const dbName = typeof db === 'string'
+      ? db
+      : ((db as any).db || (db as any).databaseName);
 
-      config.cn_str = config.cn_str || config.connectionString || config.connString || config.connection;
-      config.db = config.db || config.dbName || config.database;
-
-      if (!config.cn_str || !config.db) {
-        throw new BadRequestException(`Invalid config for ${appName}`);
-      }
-
-      return { cn_str: config.cn_str, dbName: config.db };
-    } catch (err: any) {
-      throw new BadRequestException(`App config error for ${appName}: ${err.message}`);
+    if (!dbName) {
+      throw new BadRequestException('Database name missing or invalid in configuration');
     }
+
+    return { 
+      cn_str: (db as any).cn_str, 
+      dbName: dbName 
+    };
+  } catch (err: any) {
+    throw new BadRequestException(`App config error for ${appName}: ${err.message}`);
   }
+}
 
   // ===== JWT Tokens =====
   private generateTokens(userId: string, roleId: string, tokenVersion = 1) {
