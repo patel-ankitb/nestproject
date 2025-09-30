@@ -1,7 +1,7 @@
 import { Controller, Post, Body, HttpException, HttpStatus } from '@nestjs/common';
 import { AppConfigService } from './app-config.service';
 
-@Controller('app-config')
+@Controller('api/getAppConfig')
 export class AppConfigController {
   constructor(private readonly appConfigService: AppConfigService) {}
 

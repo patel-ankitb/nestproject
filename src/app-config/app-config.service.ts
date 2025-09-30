@@ -4,6 +4,7 @@ import { DatabaseService } from '../databases/database.service'; // Hypothetical
 
 
 @Injectable()
+
 export class AppConfigService {
   constructor(private readonly mongoDBService: DatabaseService) {}
 

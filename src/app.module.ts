@@ -8,6 +8,7 @@ import { format } from 'path';
 import { formatmodule } from './format/format.module';
 import { EvaluationModule } from './evaluation/evaluation.module';
 import { UploadModule } from './fileupload/file.module';
+import { AppConfigModule } from './app-config/app-config.module';
 // import { RegisterLoginModule} from './registerlogin/registerlogin.module';
 // import { filemodule } from './fileupload/file.module';
 
@@ -23,6 +24,7 @@ import { UploadModule } from './fileupload/file.module';
      EvaluationModule,
     //  filemodule
     UploadModule,
+    AppConfigModule,
     // RegisterLoginModule,
 
   ],
