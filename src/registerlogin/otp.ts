@@ -41,7 +41,8 @@ export class OtpService {
   async sendOtp(uniqueId: string, otpLength = 4, expiresInMinutes = 2, appName: string) {
     try {
       // Generate OTP (fixed for demo emails)
-      const otp: string = uniqueId === 'hanademo@mail.com' ? '9999' : this.generateOtp(otpLength);
+      const otp: string =
+        uniqueId === 'hanademo@mail.com' ? '9999' : this.generateOtp(otpLength);
 
       const db = await this.getDb(appName);
       const otpCollection = db.collection('otp');
@@ -49,25 +50,30 @@ export class OtpService {
       // Ensure TTL index exists
       await otpCollection.createIndex({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 
-      // Store OTP in DB
       const expiresAt = new Date(Date.now() + expiresInMinutes * 60 * 1000);
-      await otpCollection.insertOne({
-        uniqueId,
-        otp,
-        appName,
-        expiresAt,
-        createdAt: new Date(),
-      });
+
+      // ✅ Upsert OTP (only one active OTP per user/app)
+      await otpCollection.updateOne(
+        { uniqueId, appName },
+        {
+          $set: {
+            otp,
+            appName,
+            uniqueId,
+            expiresAt,
+            createdAt: new Date(),
+          },
+        },
+        { upsert: true },
+      );
 
       // Determine channel: mobile vs email
       const isMobile = /^\+\d{7,15}$/.test(uniqueId);
       const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(uniqueId);
 
       if (isMobile) {
-        // Send OTP via SMS using the new sendSMS API
         await this.smsService.sendSMS(db, uniqueId, `Your OTP is: ${otp}`, 'otp');
       } else if (isEmail) {
-        // Send OTP via Email
         await this.emailService.sendOtpEmail(uniqueId, otp);
       } else {
         throw new BadRequestException(`Invalid mobile/email: ${uniqueId}`);
@@ -88,9 +94,17 @@ export class OtpService {
       const record = await otpCollection.findOne({ uniqueId, appName });
 
       if (!record) throw new BadRequestException('OTP has expired or not found');
+
+      // ✅ Check expiry manually
+      if (record.expiresAt && new Date(record.expiresAt) < new Date()) {
+        await otpCollection.deleteOne({ _id: record._id }); // cleanup
+        throw new BadRequestException('OTP has expired');
+      }
+
+      // ✅ Check OTP match
       if (record.otp !== otp) throw new BadRequestException('Invalid OTP');
 
-      // Delete OTP after verification
+      // ✅ OTP verified → delete immediately
       await otpCollection.deleteOne({ _id: record._id });
 
       return { success: true, message: 'OTP verified successfully' };
