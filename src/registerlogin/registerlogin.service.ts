@@ -41,7 +41,6 @@ export class RegisterLoginService {
     const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(uniqueId);
 
     if (isMobile || isEmail) {
-      // otp.ts exposes a unified sendOtp method that handles both SMS and Email
       return this.otpService.sendOtp(uniqueId, 4, 2, appName);
     } else {
       throw new BadRequestException(`Invalid mobile/email: ${uniqueId}`);
@@ -161,7 +160,7 @@ export class RegisterLoginService {
     }
   }
 
-  // ===== VERIFY OTP =====
+  // ===== VERIFY OTP (LOGIN) =====
   async verifyOtp(dto: any) {
     const { appName, email, name, otp } = dto;
     if (!appName || (!email && !name) || !otp) {
@@ -169,12 +168,58 @@ export class RegisterLoginService {
     }
 
     const uniqueId = email || name;
-    const result = await this.otpService.verifyOtp(uniqueId, otp, appName);
 
+    // Step 1: Verify OTP
+    const result = await this.otpService.verifyOtp(uniqueId, otp, appName);
     if (!result.success) {
-      throw new BadRequestException(result.message);
+      throw new BadRequestException(result.message || 'Invalid OTP');
     }
 
-    return { success: true, message: 'OTP verified successfully' };
+    // Step 2: Get DB
+    const db: Db = await this.databaseService.getAppDB(appName);
+    const usersCollection = db.collection<any>('appuser');
+    const rolesCollection = db.collection<any>('approle');
+    const logsCollection = db.collection<any>('login_logs');
+
+    // Step 3: Find user
+    const user = await usersCollection.findOne({
+      $or: [
+        { 'sectionData.appuser.email': email?.toLowerCase() },
+        { 'sectionData.appuser.mobile': name },
+      ],
+    });
+    if (!user) throw new NotFoundException('User not found');
+
+    // Step 4: Find role
+    const assignedRole = await rolesCollection.findOne({ _id: user.sectionData.appuser.role });
+    if (!assignedRole) throw new NotFoundException('Role not found');
+
+    // Step 5: Log user login
+    await logsCollection.insertOne({
+      _id: Date.now().toString(),
+      u_id: user._id,
+      r_id: assignedRole._id,
+      tokenVersion: 1,
+      logs: [{ type: 'in', time: new Date() }],
+    });
+
+    // Step 6: Generate tokens
+    const { accessToken, refreshToken } = this.generateTokens(
+      user._id,
+      assignedRole._id,
+      1,
+    );
+
+    return {
+      success: true,
+      message: 'OTP verified successfully',
+      accessToken,
+      refreshToken,
+      user: {
+        _id: user._id,
+        username: user.sectionData.appuser.name,
+        role: assignedRole.sectionData?.approle,
+      },
+    };
   }
 }
