@@ -79,7 +79,9 @@ export class OtpService {
         throw new BadRequestException(`Invalid mobile/email: ${uniqueId}`);
       }
 
-      return { success: true, message: `OTP sent to ${uniqueId}` };
+      // ✅ For DEV only → also return OTP in response
+      return { success: true, message: `OTP sent to ${uniqueId}`, otp };
+
     } catch (err: any) {
       throw new InternalServerErrorException(err.message);
     }
