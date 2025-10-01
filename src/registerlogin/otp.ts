@@ -92,8 +92,9 @@ export class OtpService {
     try {
       const db = await this.getDb(appName);
       const otpCollection = db.collection('otp');
-
+      console.log("verifying OTP for:", db);
       const record = await otpCollection.findOne({ uniqueId, appName });
+      console.log('OTP Record:', record);
 
       if (!record) throw new BadRequestException('OTP has expired or not found');
 
