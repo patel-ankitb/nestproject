@@ -222,7 +222,7 @@ export class UploadService {
         filePath: publicUrl,
       };
     } catch (error: any) {
-      this.logger.error('Upload failed', error.stack || error.message);
+      this.logger.error('Upload failed....', error.stack || error.message);
       throw error;
     } finally {
       // always cleanup temp file
