@@ -112,25 +112,25 @@ export class UploadService {
       // 🔹 Step 3: connect to app-specific DB
       const appConn = await this.getConnection(cn_str, db);
 
-      // ✅ Fetch from objectStorage collection
+      // ✅ Fetch from objectstorage collection
       const ObjectStorageModel = appConn.model(
-        'objectStorage',
+        'objectstorage',
         new mongoose.Schema({}, { strict: false }),
-        'objectStorage',
+        'objectstorage',
       );
 
-      const objectStorageDoc = await ObjectStorageModel.findOne().lean<any>();
-      if (!objectStorageDoc) {
-        throw new Error(`objectStorage config not found for app '${appnm}'`);
+      const objectstorageDoc = await ObjectStorageModel.findOne().lean<any>();
+      if (!objectstorageDoc) {
+        throw new Error(`objectstorage config not found for app '${appnm}'`);
       }
 
       // ✅ Extract nested config
-      const objectStorageConfig = objectStorageDoc.sectionData?.Objectstorage;
-      if (!objectStorageConfig) {
-        throw new Error(`objectStorage config invalid for app '${appnm}'`);
+      const objectstorageConfig = objectstorageDoc.sectionData?.Objectstorage;
+      if (!objectstorageConfig) {
+        throw new Error(`objectstorage config invalid for app '${appnm}'`);
       }
 
-      const storageType = objectStorageConfig.type || 'Local';
+      const storageType = objectstorageConfig.type || 'Local';
 
       // Common file info
       const mimeType = mime.lookup(file.originalname) || '';
@@ -160,7 +160,7 @@ export class UploadService {
 
       // 🔹 Case 1: Upload to S3
       if (['S3 Compatible', 'AWS S3'].includes(storageType)) {
-        const { bucketName, region, accessKey, secretKey, endpoint } = objectStorageConfig;
+        const { bucketName, region, accessKey, secretKey, endpoint } = objectstorageConfig;
 
         // 👇 `body.filename` ne sub-folder banavyu
         const subFolder = body.filename ? `/${body.filename}` : '';
