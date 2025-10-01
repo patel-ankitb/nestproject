@@ -12,13 +12,13 @@ export class AccessControlMiddleware implements NestMiddleware {
 
   async use(req: Request, res: Response, next: NextFunction) {
     const action =
-      req.method === 'POST' && req.path.includes('basic-modules')
+      req.method === 'POST' && (req.path.includes('basic-modules') || req.path.includes('create-module'))
         ? 'create-module'
         : req.method === 'POST'
         ? 'save-config'
         : 'get-config';
     const { appName } = req.params;
-    const moduleName = req.query.moduleName as string || 'basicModule'; // Default moduleName
+    const moduleName = req.query.moduleName as string || 'basicModule';
     const token = req.headers.authorization;
 
     if (!token) {
