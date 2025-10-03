@@ -21,7 +21,6 @@ export class JwtService {
 
       return decoded;
     } catch (err) {
-      console.log(err,"err");
       return null;
     }
   }
