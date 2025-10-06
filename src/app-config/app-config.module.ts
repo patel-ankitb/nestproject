@@ -12,6 +12,8 @@ import { CreateModuleService } from './create-module.service';
 import { AddModuleService } from './add-module.service';
 import { DeleteCompanyController } from './delete-company.controller';
 import { DeleteCompanyService } from './delete-company.service';
+import { DeleteModuleController } from './delete-module.controller';
+import { DeleteModuleService } from './delete-module.service';
 import { AccessControlMiddleware } from '../middleware/access-control.middleware';
 import { DatabaseService } from '../databases/database.service'; // Hypothetical MongoDB service
 import { JwtService } from '../utils/jwt.service';
@@ -26,6 +28,7 @@ import { RedisService } from '../utils/redis.service';
     BasicModulesController,
     CreateModuleController,
     DeleteCompanyController,
+    DeleteModuleController,
   ],
   providers: [
     AppConfigService,
@@ -35,6 +38,7 @@ import { RedisService } from '../utils/redis.service';
     CreateModuleService,
     AddModuleService,
     DeleteCompanyService,
+    DeleteModuleService,
     DatabaseService,
     JwtService,
     RedisService,
@@ -43,6 +47,7 @@ import { RedisService } from '../utils/redis.service';
     AddModuleService, // Export AddModuleService if used in other modules
     DatabaseService,   // Export MongoDBService if used elsewhere
     DeleteCompanyService,
+    DeleteModuleService,
   ],
 })
 export class AppConfigModule implements NestModule {
